@@ -177,9 +177,12 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new() -> Self {
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
+        // 与 Codex 一样走客户端配置的对外代理；只读进程环境变量的话，从开始菜单启动时没有 HTTPS_PROXY，
+        // 直连 api.anthropic.com 会被按地区拒绝（403 Request not allowed）。
+        let client = crate::providers::codex::client::apply_outbound_proxy(
+            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()),
+        )
+        .build()
             .expect("failed to build anthropic passthrough client");
         Self {
             client,

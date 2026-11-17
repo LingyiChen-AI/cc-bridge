@@ -617,6 +617,11 @@ impl ProxyEnvironment {
     }
 }
 
+/// 按运行时覆盖（客户端里配置的对外代理）或环境变量给 builder 配上对外代理，供其它 provider 复用。
+pub(crate) fn apply_outbound_proxy(builder: reqwest::ClientBuilder) -> reqwest::ClientBuilder {
+    ProxyEnvironment::from_env().apply(builder)
+}
+
 fn native_http_client(proxy_environment: &ProxyEnvironment) -> reqwest::Client {
     proxy_environment
         .apply(
