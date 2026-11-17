@@ -8,7 +8,7 @@ pub fn codex_cli_version() -> Option<String> {
     hide_window(&mut cmd);
     let out = cmd.output().ok()?;
     let s = String::from_utf8_lossy(&out.stdout).trim().to_string();
-    Some(if s.is_empty() { "已安装".into() } else { s })
+    Some(if s.is_empty() { "codex".into() } else { s })
 }
 
 fn hide_window(cmd: &mut Command) {
@@ -58,24 +58,24 @@ pub fn normalize_proxy(raw: &str) -> Option<String> {
 pub fn test_outbound(proxy: Option<&str>) -> Result<u64, String> {
     let mut b = reqwest::blocking::Client::builder().timeout(Duration::from_secs(8));
     b = match proxy.map(str::trim).filter(|s| !s.is_empty()) {
-        Some(p) => b.proxy(reqwest::Proxy::all(p).map_err(|e| format!("代理地址无效：{e}"))?),
+        Some(p) => b.proxy(reqwest::Proxy::all(p).map_err(|e| format!("badProxy: {e}"))?),
         None => b.no_proxy(),
     };
     let client = b.build().map_err(|e| e.to_string())?;
     let t = Instant::now();
     // 测 Codex 实际调用的地址（GET 会返回 405，能拿到任何 HTTP 响应即算连通）
     client.get("https://chatgpt.com/backend-api/codex/responses").send().map_err(|e| {
-        if e.is_timeout() { "连接超时".to_string() } else if e.is_connect() { "无法连接（检查代理是否开启）".to_string() } else { e.to_string() }
+        if e.is_timeout() { "timeout".to_string() } else if e.is_connect() { "connect".to_string() } else { format!("other: {e}") }
     })?;
     Ok(t.elapsed().as_millis() as u64)
 }
 
 pub fn open_codex_login() -> Result<(), String> {
     if which::which("codex").is_err() {
-        return Err("未安装 Codex CLI：npm i -g @openai/codex".into());
+        return Err("noCli".into());
     }
     #[cfg(windows)]
-    let r = Command::new("cmd").args(["/c", "start", "Codex 登录", "cmd", "/k", "codex login"]).spawn();
+    let r = Command::new("cmd").args(["/c", "start", "codex login", "cmd", "/k", "codex login"]).spawn();
     #[cfg(target_os = "macos")]
     let r = Command::new("osascript").args(["-e", "tell application \"Terminal\" to do script \"codex login\"", "-e", "tell application \"Terminal\" to activate"]).spawn();
     #[cfg(all(unix, not(target_os = "macos")))]
@@ -84,9 +84,9 @@ pub fn open_codex_login() -> Result<(), String> {
         tries
             .iter()
             .find_map(|(bin, pre)| Command::new(bin).args(*pre).args(["sh", "-c", "codex login; exec $SHELL"]).spawn().ok())
-            .ok_or_else(|| std::io::Error::other("没有找到可用的终端"))
+            .ok_or_else(|| std::io::Error::other("no terminal emulator found"))
     };
-    r.map(|_| ()).map_err(|e| format!("打开终端失败：{e}"))
+    r.map(|_| ()).map_err(|e| format!("terminal: {e}"))
 }
 
 #[cfg(test)]

@@ -675,6 +675,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc-bridge"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "claude-codex",
+ "dirs 6.0.0",
+ "libc",
+ "netstat2",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "signal-hook",
+ "sys-locale",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-notification",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "which",
+ "windows-sys 0.60.2",
+ "winreg 0.55.0",
+]
+
+[[package]]
 name = "cesu8"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -845,34 +874,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "052af7878466feccda12ba7a6a67d019d712f296809559b47c12c8cc196d3a9a"
 dependencies = [
  "error-code",
-]
-
-[[package]]
-name = "codex-bridge"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.22.1",
- "claude-codex",
- "dirs 6.0.0",
- "libc",
- "netstat2",
- "reqwest 0.12.28",
- "serde",
- "serde_json",
- "signal-hook",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-notification",
- "tauri-plugin-single-instance",
- "tempfile",
- "tokio",
- "which",
- "windows-sys 0.60.2",
- "winreg 0.55.0",
 ]
 
 [[package]]
@@ -4977,6 +4978,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.10",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]

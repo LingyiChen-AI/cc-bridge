@@ -18,15 +18,29 @@ pub struct AppConfig {
     pub takeover: bool,
     /// 写进 Claude Code 选单的模型；None = 默认取最新的 DEFAULT_MODEL_COUNT 个
     pub selected_models: Option<Vec<String>>,
+    /// "zh" | "en"；None = 跟随系统
+    pub language: Option<String>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, outbound_proxy: None, codex_home: None, claude_dir: None, autostart: true, takeover: true, selected_models: None }
+        Self { port: DEFAULT_PORT, outbound_proxy: None, codex_home: None, claude_dir: None, autostart: true, takeover: true, selected_models: None, language: None }
     }
 }
 
 impl AppConfig {
+    /// 实际使用的界面语言：设置优先，否则跟随系统（中文系统用 zh，其它用 en）。
+    pub fn lang(&self) -> &'static str {
+        match self.language.as_deref() {
+            Some("zh") => "zh",
+            Some("en") => "en",
+            _ => {
+                let sys = sys_locale::get_locale().unwrap_or_default().to_lowercase();
+                if sys.starts_with("zh") { "zh" } else { "en" }
+            }
+        }
+    }
+
     /// 实际写入的模型：按可用列表（新→旧）顺序，过滤掉已不存在的选择。
     pub fn effective_models(&self, available: &[String]) -> Vec<String> {
         match &self.selected_models {

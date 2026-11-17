@@ -48,7 +48,7 @@
 html, body { margin: 0; height: 100%; }
 body { background: var(--bg); color: var(--text); font: 13px/1.5 var(--sans); -webkit-font-smoothing: antialiased; user-select: none; overflow-x: hidden; }
 #app { min-height: 100%; display: flex; flex-direction: column; }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
 button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
@@ -190,3 +190,5 @@ button { cursor: pointer; }
 .models .m.pick .name { flex: 1; color: var(--text-2); }
 .models .m.pick.on .name { color: var(--text); }
 .h .act + .act { margin-left: 8px; }
+
+select.input { appearance: none; padding-right: 28px; background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%), linear-gradient(135deg, var(--text-3) 50%, transparent 50%); background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px; background-size: 5px 5px; background-repeat: no-repeat; cursor: pointer; }

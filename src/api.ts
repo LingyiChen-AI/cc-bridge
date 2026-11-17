@@ -12,7 +12,7 @@ export type ProxyState =
 export type AuthState =
   | { kind: 'ok'; expiresAt: number }
   | { kind: 'expiredRefreshable' }
-  | { kind: 'missing'; reason: string };
+  | { kind: 'missing'; code: string };
 
 export interface AppConfig {
   port: number;
@@ -22,6 +22,7 @@ export interface AppConfig {
   autostart: boolean;
   takeover: boolean;
   selected_models: string[] | null;
+  language: string | null;
 }
 
 export interface Status {
@@ -41,6 +42,7 @@ export interface Status {
   logsTail: string[];
   onboarded: boolean;
   devMode: boolean;
+  lang: string;
 }
 
 export interface EnvReport {

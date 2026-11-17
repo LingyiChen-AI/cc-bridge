@@ -257,7 +257,7 @@ impl Supervisor {
             }
         });
         if !finished {
-            self.log("[codex-bridge] 代理未能在 3 秒内退出，已强制中止".into());
+            self.log("[cc-bridge] proxy did not stop within 3s, aborted".into());
         }
     }
 
@@ -282,7 +282,7 @@ impl Supervisor {
             if TcpListener::bind(("127.0.0.1", port)).is_err() {
                 let pid = port_owner(port);
                 let is_cc = pid.and_then(process_name).is_some_and(|n| n.to_lowercase().starts_with("claude-codex"));
-                self.log(format!("[codex-bridge] 端口 {port} 已被占用 pid={pid:?}"));
+                self.log(format!("[cc-bridge] port {port} is in use, pid={pid:?}"));
                 self.set_state(ProxyState::PortBusy { pid, is_claude_codex: is_cc });
                 return;
             }
@@ -312,7 +312,7 @@ impl Supervisor {
                 }
                 None => {
                     let tail = self.0.logs.tail(5).join("\n");
-                    self.set_state(ProxyState::Failed { message: format!("代理在 1 分钟内反复退出，已停止自动重启。\n{tail}") });
+                    self.set_state(ProxyState::Failed { message: tail });
                     return;
                 }
             }
@@ -328,8 +328,8 @@ impl Supervisor {
             let _ = rx.await;
         }));
         self.log(format!(
-            "[codex-bridge] 代理已在进程内启动 端口 {port} 出口 {}",
-            cfg.outbound().unwrap_or("直连")
+            "[cc-bridge] proxy started in-process on port {port}, outbound {}",
+            cfg.outbound().unwrap_or("direct")
         ));
         *self.0.server.lock().unwrap() = Some(Running { shutdown: Some(tx), task });
     }
@@ -343,13 +343,13 @@ impl Supervisor {
         }
         let task = guard.take().unwrap().task;
         let msg = match self.0.rt.block_on(task) {
-            Ok(Ok(())) => "代理服务已退出".to_string(),
-            Ok(Err(e)) => format!("代理服务出错退出：{e:#}"),
-            Err(e) if e.is_panic() => "代理服务发生 panic".to_string(),
-            Err(e) => format!("代理服务被中止：{e}"),
+            Ok(Ok(())) => "proxy server exited".to_string(),
+            Ok(Err(e)) => format!("proxy server failed: {e:#}"),
+            Err(e) if e.is_panic() => "proxy server panicked".to_string(),
+            Err(e) => format!("proxy server aborted: {e}"),
         };
         drop(guard);
-        self.log(format!("[codex-bridge] {msg}"));
+        self.log(format!("[cc-bridge] {msg}"));
         true
     }
 
@@ -365,7 +365,7 @@ impl Supervisor {
                 break;
             }
             if Instant::now() > deadline {
-                self.log("[codex-bridge] 代理启动超时".into());
+                self.log("[cc-bridge] proxy startup timed out".into());
                 return;
             }
             thread::sleep(Duration::from_millis(400));
@@ -384,7 +384,7 @@ impl Supervisor {
             } else {
                 fails += 1;
                 if fails >= MAX_HEALTH_FAILS {
-                    self.log("[codex-bridge] 健康检查连续失败，重启代理".into());
+                    self.log("[cc-bridge] health check failed repeatedly, restarting proxy".into());
                     return;
                 }
             }

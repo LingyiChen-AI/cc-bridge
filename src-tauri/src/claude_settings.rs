@@ -15,8 +15,8 @@ pub enum SettingsError {
 impl std::fmt::Display for SettingsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Io(e) => write!(f, "读取失败：{e}"),
-            Self::Invalid(e) => write!(f, "settings.json 不是合法 JSON，已停止修改：{e}"),
+            Self::Io(e) => write!(f, "io: {e}"),
+            Self::Invalid(e) => write!(f, "invalid: {e}"),
         }
     }
 }
@@ -33,7 +33,7 @@ pub fn read_settings(path: &Path) -> Result<Value, SettingsError> {
     }
     match serde_json::from_slice::<Value>(bytes) {
         Ok(v @ Value::Object(_)) => Ok(v),
-        Ok(_) => Err(SettingsError::Invalid("顶层不是对象".into())),
+        Ok(_) => Err(SettingsError::Invalid("top-level value is not an object".into())),
         Err(e) => Err(SettingsError::Invalid(e.to_string())),
     }
 }

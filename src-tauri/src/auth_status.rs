@@ -11,7 +11,8 @@ pub enum AuthState {
     Ok { expires_at: i64 },
     /// 已过期但有 refresh_token，代理下次请求会自动续期
     ExpiredRefreshable,
-    Missing { reason: String },
+    /// code: notFound | invalidJson | noToken | expired（前端按语言翻译）
+    Missing { code: String },
 }
 
 /// 与上游一致的定位顺序：设置项 > CODEX_HOME > ~/.codex
@@ -32,23 +33,23 @@ pub fn jwt_exp(token: &str) -> Option<i64> {
 }
 
 pub fn inspect_auth(path: &Path, now_unix: i64) -> AuthState {
-    let missing = |r: &str| AuthState::Missing { reason: r.to_string() };
+    let missing = |c: &str| AuthState::Missing { code: c.to_string() };
     let Ok(bytes) = fs::read(path) else {
-        return missing("未找到 Codex 登录文件，请运行 codex login");
+        return missing("notFound");
     };
     let Ok(doc) = serde_json::from_slice::<Value>(&bytes) else {
-        return missing("Codex 登录文件不是合法 JSON");
+        return missing("invalidJson");
     };
     let tokens = doc.get("tokens");
     let access = tokens.and_then(|t| t.get("access_token")).and_then(Value::as_str).unwrap_or("");
     if access.is_empty() {
-        return missing("登录文件里没有 ChatGPT 令牌，请运行 codex login");
+        return missing("noToken");
     }
     let has_refresh = tokens.and_then(|t| t.get("refresh_token")).and_then(Value::as_str).is_some_and(|s| !s.is_empty());
     match jwt_exp(access) {
         Some(exp) if exp > now_unix => AuthState::Ok { expires_at: exp },
         _ if has_refresh => AuthState::ExpiredRefreshable,
-        _ => missing("令牌已过期且无法续期，请运行 codex login"),
+        _ => missing("expired"),
     }
 }
 

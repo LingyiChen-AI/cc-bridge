@@ -18,21 +18,22 @@ const base: Status = {
   settingsError: null,
   models,
   selectedModels: models.slice(0, 6),
-  config: { port: 18765, outbound_proxy: 'http://127.0.0.1:7890', codex_home: null, claude_dir: null, autostart: true, takeover: true, selected_models: null },
+  config: { port: 18765, outbound_proxy: 'http://127.0.0.1:7890', codex_home: null, claude_dir: null, autostart: true, takeover: true, selected_models: null, language: null },
   logsTail: [
-    '[codex-bridge] 代理已启动 pid=27632 端口 18765',
+    '[cc-bridge] 代理已启动 pid=27632 端口 18765',
     '{"level":"info","msg":"server listening","fields":{"port":18765}}',
     '{"level":"info","msg":"request_completed","fields":{"model":"gpt-6.1-sol","status":200,"ms":1840}}',
   ],
   onboarded: true,
   devMode: new URLSearchParams(location.search).has('dev'),
+  lang: new URLSearchParams(location.search).get('lang') ?? 'zh',
 };
 
 const scenes: Record<string, Partial<Status>> = {
   ok: {},
   portBusy: { proxy: { kind: 'portBusy', pid: 73876, isClaudeCodex: true }, takenOver: false, models: [] },
   authMissing: {
-    auth: { kind: 'missing', reason: '未找到 Codex 登录文件，请运行 codex login' },
+    auth: { kind: 'missing', code: 'notFound' },
     authHint: 'No Codex credentials. Log in with the Codex CLI (`codex login`) to create ~/.codex/auth.json',
     networkHint: null,
   },

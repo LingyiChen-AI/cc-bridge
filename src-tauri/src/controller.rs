@@ -34,6 +34,7 @@ pub struct StatusDto {
     pub logs_tail: Vec<String>,
     pub onboarded: bool,
     pub dev_mode: bool,
+    pub lang: String,
 }
 
 pub struct Controller {
@@ -75,7 +76,7 @@ impl Controller {
             rec: Mutex::new(rec),
             onboarded: AtomicBool::new(onboarded),
             settings_error: Mutex::new(None),
-            auth: Mutex::new(AuthState::Missing { reason: String::new() }),
+            auth: Mutex::new(AuthState::Missing { code: String::new() }),
             tx,
             shut: AtomicBool::new(false),
             on_status: Mutex::new(None),
@@ -175,8 +176,8 @@ impl Controller {
                     .app
                     .notification()
                     .builder()
-                    .title("Codex Bridge：代理不可用")
-                    .body("已临时撤销对 Claude Code 的接管，新开的 Claude Code 窗口只用 Claude 模型。")
+                    .title(crate::i18n::tr(cfg.lang(), "notifyFailedTitle"))
+                    .body(crate::i18n::tr(cfg.lang(), "notifyFailedBody"))
                     .show();
             }
         }
@@ -234,7 +235,7 @@ impl Controller {
         }
         self.save_record(&rec);
         for w in warnings {
-            self.sup.note(format!("[codex-bridge] {w}"));
+            self.sup.note(format!("[cc-bridge] {w}"));
         }
         doc != before
     }
@@ -265,10 +266,12 @@ impl Controller {
             settings_error: self.settings_error.lock().unwrap().clone(),
             selected_models: cfg.effective_models(&self.sup.models()),
             models: self.sup.models(),
+            lang: cfg.lang().to_string(),
             config: cfg,
             logs_tail: self.sup.logs_tail(200),
             onboarded: self.onboarded(),
             dev_mode: crate::config::DEV_MODE,
+
         }
     }
 

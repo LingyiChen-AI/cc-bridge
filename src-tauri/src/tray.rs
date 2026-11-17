@@ -12,9 +12,13 @@ use tauri::{
     tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent},
 };
 use tauri_plugin_autostart::ManagerExt;
+use crate::i18n::tr;
 
 pub struct Tray {
     icon: TrayIcon,
+    open: MenuItem<Wry>,
+    restart: MenuItem<Wry>,
+    quit: MenuItem<Wry>,
     proxy: MenuItem<Wry>,
     auth: MenuItem<Wry>,
     takeover_line: MenuItem<Wry>,
@@ -38,21 +42,22 @@ pub fn show_main(app: &AppHandle) {
 }
 
 pub fn build(app: &AppHandle, ctl: Arc<Controller>) -> tauri::Result<Tray> {
-    let proxy = MenuItem::with_id(app, "s_proxy", "代理：启动中", false, None::<&str>)?;
-    let auth = MenuItem::with_id(app, "s_auth", "Codex：检测中", false, None::<&str>)?;
-    let takeover_line = MenuItem::with_id(app, "s_take", "Claude Code：未接管", false, None::<&str>)?;
-    let open = MenuItem::with_id(app, "open", "打开主窗口", true, None::<&str>)?;
-    let takeover = CheckMenuItem::with_id(app, "takeover", "接管 Claude Code", true, ctl.config().takeover, None::<&str>)?;
-    let restart = MenuItem::with_id(app, "restart", "重启代理", true, None::<&str>)?;
-    let autostart = CheckMenuItem::with_id(app, "autostart", "开机自启", true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
+    let l = ctl.config().lang();
+    let proxy = MenuItem::with_id(app, "s_proxy", tr(l, "trayProxyStarting"), false, None::<&str>)?;
+    let auth = MenuItem::with_id(app, "s_auth", "Codex", false, None::<&str>)?;
+    let takeover_line = MenuItem::with_id(app, "s_take", tr(l, "trayNotTaken"), false, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", tr(l, "menuOpen"), true, None::<&str>)?;
+    let takeover = CheckMenuItem::with_id(app, "takeover", tr(l, "menuTakeover"), true, ctl.config().takeover, None::<&str>)?;
+    let restart = MenuItem::with_id(app, "restart", tr(l, "menuRestart"), true, None::<&str>)?;
+    let autostart = CheckMenuItem::with_id(app, "autostart", tr(l, "menuAutostart"), true, app.autolaunch().is_enabled().unwrap_or(false), None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", tr(l, "menuQuit"), true, None::<&str>)?;
     let sep = || PredefinedMenuItem::separator(app);
     let menu = Menu::with_items(app, &[&proxy, &auth, &takeover_line, &sep()?, &open, &takeover, &restart, &autostart, &sep()?, &quit])?;
 
     let c = ctl.clone();
     let icon = TrayIconBuilder::with_id("main")
         .icon(level_icon(Level::Warn))
-        .tooltip("Codex Bridge")
+        .tooltip("CC Bridge")
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(move |app, e| match e.id().as_ref() {
@@ -74,7 +79,7 @@ pub fn build(app: &AppHandle, ctl: Arc<Controller>) -> tauri::Result<Tray> {
             }
         })
         .build(app)?;
-    Ok(Tray { icon, proxy, auth, takeover_line, takeover, autostart })
+    Ok(Tray { icon, open, restart, quit, proxy, auth, takeover_line, takeover, autostart })
 }
 
 pub fn level_icon(l: Level) -> Image<'static> {
@@ -87,24 +92,26 @@ pub fn level_icon(l: Level) -> Image<'static> {
 }
 
 pub fn proxy_text(st: &StatusDto) -> (Level, String) {
+    let l = st.lang.as_str();
     match &st.proxy {
-        ProxyState::Running => (Level::Ok, format!("代理运行中 :{}", st.port)),
-        ProxyState::Starting => (Level::Warn, "代理启动中".into()),
-        ProxyState::Restarting { attempt } => (Level::Warn, format!("代理重启中（第 {attempt} 次）")),
-        ProxyState::Failed { .. } => (Level::Err, "代理已停止：反复崩溃".into()),
-        ProxyState::PortBusy { .. } => (Level::Err, format!("端口 {} 被占用", st.port)),
-        ProxyState::Stopped => (Level::Warn, "代理未启动".into()),
+        ProxyState::Running => (Level::Ok, format!("{} :{}", tr(l, "trayProxyRunning"), st.port)),
+        ProxyState::Starting => (Level::Warn, tr(l, "trayProxyStarting").into()),
+        ProxyState::Restarting { attempt } => (Level::Warn, format!("{} ({attempt})", tr(l, "trayProxyRestarting"))),
+        ProxyState::Failed { .. } => (Level::Err, tr(l, "trayProxyFailed").into()),
+        ProxyState::PortBusy { .. } => (Level::Err, format!("{} :{}", tr(l, "trayPortBusy"), st.port)),
+        ProxyState::Stopped => (Level::Warn, tr(l, "trayProxyStopped").into()),
     }
 }
 
 pub fn auth_text(st: &StatusDto) -> (Level, String) {
+    let l = st.lang.as_str();
     if st.auth_hint.is_some() {
-        return (Level::Err, "Codex 登录无效（401）".into());
+        return (Level::Err, tr(l, "trayAuth401").into());
     }
     match &st.auth {
-        AuthState::Ok { .. } => (Level::Ok, "Codex 已登录".into()),
-        AuthState::ExpiredRefreshable => (Level::Warn, "Codex 令牌待续期".into()),
-        AuthState::Missing { .. } => (Level::Err, "Codex 未登录".into()),
+        AuthState::Ok { .. } => (Level::Ok, tr(l, "trayAuthOk").into()),
+        AuthState::ExpiredRefreshable => (Level::Warn, tr(l, "trayAuthRefresh").into()),
+        AuthState::Missing { .. } => (Level::Err, tr(l, "trayAuthMissing").into()),
     }
 }
 
@@ -112,7 +119,14 @@ impl Tray {
     pub fn update(&self, st: &StatusDto) {
         let (pl, pt) = proxy_text(st);
         let (al, at) = auth_text(st);
-        let take = if st.taken_over { "Claude Code 已接管" } else if st.takeover { "Claude Code 等待接管" } else { "Claude Code 未接管" };
+        let l = st.lang.as_str();
+        let take = tr(l, if st.taken_over { "trayTaken" } else if st.takeover { "trayWaiting" } else { "trayNotTaken" });
+        // 语言可能在设置里切换，菜单文字每次同步
+        let _ = self.open.set_text(tr(l, "menuOpen"));
+        let _ = self.restart.set_text(tr(l, "menuRestart"));
+        let _ = self.quit.set_text(tr(l, "menuQuit"));
+        let _ = self.takeover.set_text(tr(l, "menuTakeover"));
+        let _ = self.autostart.set_text(tr(l, "menuAutostart"));
         let dot = |l: Level| match l {
             Level::Ok => "●",
             Level::Warn => "◐",
@@ -131,6 +145,6 @@ impl Tray {
             Level::Ok
         };
         let _ = self.icon.set_icon(Some(level_icon(overall)));
-        let _ = self.icon.set_tooltip(Some(format!("Codex Bridge\n{pt}\n{at}\n{take}")));
+        let _ = self.icon.set_tooltip(Some(format!("CC Bridge\n{pt}\n{at}\n{take}")));
     }
 }

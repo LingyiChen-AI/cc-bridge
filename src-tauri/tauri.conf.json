@@ -1,9 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Codex Bridge",
-  "mainBinaryName": "codex-bridge",
+  "productName": "CC Bridge",
+  "mainBinaryName": "cc-bridge",
   "version": "0.1.0",
-  "identifier": "dev.freecall.codexbridge",
+  "identifier": "dev.freecall.ccbridge",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -15,7 +15,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Codex Bridge",
+        "title": "CC Bridge",
         "width": 600,
         "height": 760,
         "minWidth": 520,

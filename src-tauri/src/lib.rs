@@ -2,6 +2,7 @@ pub mod auth_status;
 pub mod claude_settings;
 pub mod config;
 pub mod controller;
+pub mod i18n;
 pub mod log_buffer;
 pub mod platform;
 pub mod shutdown;
