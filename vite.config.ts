@@ -10,6 +10,8 @@ export default defineConfig(() => ({
   //
   // 1. prevent Vite from obscuring rust errors
   clearScreen: false,
+  // 只从 index.html 扫描依赖，避免进入 target/ 等大目录
+  optimizeDeps: { entries: ["index.html"] },
   // 2. tauri expects a fixed port, fail if that port is not available
   server: {
     port: 27461,
@@ -24,7 +26,8 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // workspace 编译产物（target/）和代理源码（proxy/）体积很大，不要让 Vite 监视
+      ignored: ["**/src-tauri/**", "**/target/**", "**/proxy/**", "**/.superpowers/**", "**/docs/**"],
     },
   },
 }));
