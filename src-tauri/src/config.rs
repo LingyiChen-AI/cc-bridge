@@ -18,7 +18,7 @@ pub struct AppConfig {
     pub takeover: bool,
     /// 写进 Claude Code 选单的模型；None = 默认取最新的 DEFAULT_MODEL_COUNT 个
     pub selected_models: Option<Vec<String>>,
-    /// "zh" | "en"；None = 跟随系统
+    /// 语言代码（zh / zh-TW / en / ja / ko / es / fr / de / ru / pt）；None = 跟随系统
     pub language: Option<String>,
 }
 
@@ -29,15 +29,11 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    /// 实际使用的界面语言：设置优先，否则跟随系统（中文系统用 zh，其它用 en）。
+    /// 实际使用的界面语言：设置优先，否则跟随系统；不支持的语言回落到英文。
     pub fn lang(&self) -> &'static str {
-        match self.language.as_deref() {
-            Some("zh") => "zh",
-            Some("en") => "en",
-            _ => {
-                let sys = sys_locale::get_locale().unwrap_or_default().to_lowercase();
-                if sys.starts_with("zh") { "zh" } else { "en" }
-            }
+        match self.language.as_deref().filter(|l| !l.is_empty()) {
+            Some(l) => crate::i18n::normalize(l),
+            None => crate::i18n::normalize(&sys_locale::get_locale().unwrap_or_default()),
         }
     }
 

@@ -1,6 +1,7 @@
 import { invoke, onStatus, type AppConfig, type AuthState, type EnvReport, type ProxyState, type Status } from './api';
 import { icon } from './icons';
-import { setLang, t, trError } from './i18n';
+import { LANGS, setLang, t, trError } from './i18n';
+import { anySelectOpen, installSelects, renderSelect, selectValue } from './select';
 
 type Tone = 'ok' | 'warn' | 'err';
 type Info = { tone: Tone; value: string; meta: string };
@@ -167,7 +168,7 @@ function mountSettings(cfg: AppConfig) {
   const slot = document.getElementById('settings-slot')!;
   const d = settingsDraft ?? { ...cfg };
   const dirty = settingsDraft && JSON.stringify(settingsDraft) !== JSON.stringify(cfg);
-  const opt = (v: string, label: string) => `<option value="${v}" ${(d.language ?? '') === v ? 'selected' : ''}>${label}</option>`;
+  const langOptions = [{ value: '', label: t('langAuto') }, ...LANGS.map((l) => ({ value: l.code, label: l.name }))];
   slot.outerHTML = `
     <section class="panel" id="settings">
       <div class="row">
@@ -178,7 +179,7 @@ function mountSettings(cfg: AppConfig) {
       <div class="field"><label for="f-claude">${t('claudeDir')}</label><input id="f-claude" class="input mono" placeholder="${t('dirDefault', { dir: '~/.claude' })}" value="${esc(d.claude_dir ?? '')}"></div>
       <div class="row">
         <div class="field" style="flex:1"><label for="f-lang">${t('language')}</label>
-          <select id="f-lang" class="input">${opt('', t('langAuto'))}${opt('zh', '中文')}${opt('en', 'English')}</select></div>
+          ${renderSelect('f-lang', langOptions, d.language ?? '', t('language'))}</div>
         <div class="field" style="flex:1"><label>${t('autostart')}</label>
           <div style="height:32px;display:flex;align-items:center"><label class="switch"><input type="checkbox" id="f-auto" ${d.autostart ? 'checked' : ''} aria-label="${t('autostart')}"><span></span></label></div></div>
       </div>
@@ -207,7 +208,7 @@ function readForm(base: AppConfig): AppConfig {
     codex_home: v('f-codex') || null,
     claude_dir: v('f-claude') || null,
     autostart: (document.getElementById('f-auto') as HTMLInputElement).checked,
-    language: v('f-lang') || null,
+    language: selectValue('f-lang') || null,
   };
 }
 
@@ -307,7 +308,7 @@ function render() {
 function shouldRerender() {
   if (status && !status.onboarded) return wiz.step === 0 || wiz.step === 3;
   const ae = document.activeElement;
-  return !((ae instanceof HTMLInputElement && ae.type !== 'checkbox') || ae instanceof HTMLSelectElement);
+  return !anySelectOpen() && !(ae instanceof HTMLInputElement && ae.type !== 'checkbox');
 }
 
 let toastTimer = 0;
@@ -405,11 +406,17 @@ onStatus('status-changed', (s) => {
   if (shouldRerender() || wasOnboarded !== s.onboarded || langChanged) render();
 });
 
+installSelects();
+
 (async () => {
   status = await invoke<Status>('get_status');
   setLang(status.lang);
+  // 仅浏览器预览（?mock=...）用：直接展开某个面板 / 下拉，方便截图检查
+  const q = new URLSearchParams(location.search);
+  if (q.has('mock') && q.get('panel')) panel = q.get('panel') as typeof panel;
   if (!status.onboarded) {
     render();
     await loadEnv();
   } else render();
+  if (q.has('mock') && q.has('selopen')) (document.querySelector('.sel-btn') as HTMLElement | null)?.click();
 })();
