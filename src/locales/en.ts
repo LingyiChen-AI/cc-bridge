@@ -50,4 +50,5 @@ export const en: Dict = {
   toastRestart: 'Restarting proxy', toastKill: 'Taking over the port', toastLogin: 'Terminal opened; sign-in is detected automatically',
   toastRefreshed: 'Refreshed, {n} models', toastCopiedCmd: 'Command copied', toastCopiedLogs: 'Copied {n} log lines', toastSaved: 'Saved', toastDone: 'Setup complete',
   err_noCli: 'Codex CLI is not installed: npm i -g @openai/codex', err_terminal: 'Failed to open a terminal: {detail}',
+  updTitle: 'Version v{version} is available', updBody: 'You have v{current}. Updating disconnects Claude Code and stops the proxy first, then reopens the app.', updNow: 'Update now', updDownloading: 'Downloading {pct}%', version: 'Version v{v}', checkUpdate: 'Check for updates', toastUpToDate: 'You are up to date', toastCheckFail: 'Update check failed: {detail}', toastUpdateFail: 'Update failed: {detail}',
 };

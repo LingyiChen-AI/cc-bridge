@@ -35,6 +35,8 @@ const TABLE: &[(&str, Row)] = &[
     ("menuRestart", ["重启代理", "重新啟動代理", "Restart proxy", "プロキシを再起動", "프록시 다시 시작", "Reiniciar proxy", "Redémarrer le proxy", "Proxy neu starten", "Перезапустить прокси", "Reiniciar proxy"]),
     ("menuAutostart", ["开机自启", "開機自動啟動", "Launch at login", "ログイン時に起動", "로그인 시 실행", "Abrir al iniciar sesión", "Lancer à l’ouverture de session", "Bei Anmeldung starten", "Запускать при входе", "Abrir ao iniciar a sessão"]),
     ("menuQuit", ["退出", "結束", "Quit", "終了", "종료", "Salir", "Quitter", "Beenden", "Выход", "Sair"]),
+    ("notifyUpdateTitle", ["CC Bridge 有新版本 v{version}", "CC Bridge 有新版本 v{version}", "CC Bridge v{version} is available", "CC Bridge v{version} が利用可能です", "CC Bridge v{version} 사용 가능", "CC Bridge v{version} disponible", "CC Bridge v{version} disponible", "CC Bridge v{version} verfügbar", "Доступна CC Bridge v{version}", "CC Bridge v{version} disponível"]),
+    ("notifyUpdateBody", ["打开主窗口即可一键更新。", "開啟主視窗即可一鍵更新。", "Open the window to update.", "ウィンドウを開いて更新できます。", "창을 열어 업데이트하세요.", "Abre la ventana para actualizar.", "Ouvrez la fenêtre pour mettre à jour.", "Fenster öffnen, um zu aktualisieren.", "Откройте окно, чтобы обновить.", "Abra a janela para atualizar."]),
     ("notifyFailedTitle", ["CC Bridge：代理不可用", "CC Bridge：代理無法使用", "CC Bridge: proxy unavailable", "CC Bridge：プロキシを利用できません", "CC Bridge: 프록시 사용 불가", "CC Bridge: proxy no disponible", "CC Bridge : proxy indisponible", "CC Bridge: Proxy nicht verfügbar", "CC Bridge: прокси недоступен", "CC Bridge: proxy indisponível"]),
     ("notifyFailedBody", [
         "已临时撤销对 Claude Code 的接管，新开的 Claude Code 窗口只用 Claude 模型。",

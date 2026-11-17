@@ -53,7 +53,7 @@ const env: EnvReport = {
 
 export const mock = {
   invoke: async <T,>(cmd: string): Promise<T> => {
-    const r: Record<string, unknown> = { get_status: status, detect_environment: env, test_outbound: 286, refresh_models: models, copy_logs: 3 };
+    const r: Record<string, unknown> = { get_status: status, detect_environment: env, test_outbound: 286, refresh_models: models, copy_logs: 3, app_version: '0.1.0', get_update: new URLSearchParams(location.search).has('update') ? { version: '0.2.0', current: '0.1.0', notes: null } : null };
     return r[cmd] as T;
   },
   listen: () => {},

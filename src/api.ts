@@ -62,6 +62,16 @@ const tauri = (window as any).__TAURI__;
 const real = !!tauri?.core;
 
 export const invoke: Invoke = real ? (cmd, args) => tauri.core.invoke(cmd, args) : mock.invoke;
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+}
+
+export const onEvent = <T,>(ev: string, cb: (payload: T) => void) => {
+  if (real) void tauri.event.listen(ev, (e: { payload: T }) => cb(e.payload));
+};
+
 export const onStatus: Listen = real
   ? (ev, cb) => void tauri.event.listen(ev, (e: { payload: Status }) => cb(e.payload))
   : mock.listen;

@@ -50,4 +50,5 @@ export const zhTW: Dict = {
   toastRestart: '正在重新啟動代理', toastKill: '正在接管連接埠', toastLogin: '已開啟終端機，登入完成後會自動偵測',
   toastRefreshed: '已重新整理，共 {n} 個模型', toastCopiedCmd: '已複製指令', toastCopiedLogs: '已複製 {n} 行記錄', toastSaved: '已儲存', toastDone: '設定完成',
   err_noCli: '未安裝 Codex CLI：npm i -g @openai/codex', err_terminal: '開啟終端機失敗：{detail}',
+  updTitle: '發現新版本 v{version}', updBody: '目前 v{current}。更新時會先撤銷接管、停止代理，裝完自動重新開啟。', updNow: '立即更新', updDownloading: '正在下載 {pct}%', version: '版本 v{v}', checkUpdate: '檢查更新', toastUpToDate: '已是最新版本', toastCheckFail: '檢查更新失敗：{detail}', toastUpdateFail: '更新失敗：{detail}',
 };

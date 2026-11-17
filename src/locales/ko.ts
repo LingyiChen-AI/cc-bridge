@@ -50,4 +50,5 @@ export const ko: Dict = {
   toastRestart: '프록시를 다시 시작하는 중', toastKill: '포트를 인계받는 중', toastLogin: '터미널을 열었습니다. 로그인이 자동으로 감지됩니다',
   toastRefreshed: '새로 고침 완료, 모델 {n}개', toastCopiedCmd: '명령을 복사했습니다', toastCopiedLogs: '로그 {n}줄을 복사했습니다', toastSaved: '저장했습니다', toastDone: '설정 완료',
   err_noCli: 'Codex CLI가 설치되지 않았습니다: npm i -g @openai/codex', err_terminal: '터미널을 열지 못했습니다: {detail}',
+  updTitle: '새 버전 v{version} 사용 가능', updBody: '현재 v{current}. 업데이트 시 연결을 해제하고 프록시를 중지한 뒤, 완료되면 자동으로 다시 실행합니다.', updNow: '지금 업데이트', updDownloading: '다운로드 중 {pct}%', version: '버전 v{v}', checkUpdate: '업데이트 확인', toastUpToDate: '최신 버전입니다', toastCheckFail: '업데이트 확인 실패: {detail}', toastUpdateFail: '업데이트 실패: {detail}',
 };

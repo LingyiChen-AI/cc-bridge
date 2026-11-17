@@ -50,4 +50,5 @@ export const ja: Dict = {
   toastRestart: 'プロキシを再起動しています', toastKill: 'ポートを引き継いでいます', toastLogin: 'ターミナルを開きました。ログインは自動で検出されます',
   toastRefreshed: '更新しました（{n} モデル）', toastCopiedCmd: 'コマンドをコピーしました', toastCopiedLogs: 'ログ {n} 行をコピーしました', toastSaved: '保存しました', toastDone: '設定が完了しました',
   err_noCli: 'Codex CLI がインストールされていません：npm i -g @openai/codex', err_terminal: 'ターミナルを開けませんでした：{detail}',
+  updTitle: '新しいバージョン v{version} があります', updBody: '現在 v{current}。更新時は接続を解除してプロキシを停止し、完了後に自動で再起動します。', updNow: '今すぐ更新', updDownloading: 'ダウンロード中 {pct}%', version: 'バージョン v{v}', checkUpdate: '更新を確認', toastUpToDate: '最新バージョンです', toastCheckFail: '更新の確認に失敗しました：{detail}', toastUpdateFail: '更新に失敗しました：{detail}',
 };

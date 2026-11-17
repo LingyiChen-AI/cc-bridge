@@ -14,8 +14,32 @@
 ```bash
 npm install
 npm run tauri dev      # 开发模式：端口 18766、只写沙盒配置，不影响全局 Claude Code
-npm run tauri build    # 打包安装包（Windows: msi / nsis）
+npm run tauri build    # 本地打包；需要更新签名私钥，见下文
 ```
+
+本地打包会顺带生成更新包签名，需要先设置私钥（私钥在 `~/.tauri/cc-bridge.key`，不入库）：
+
+```bash
+export TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.tauri/cc-bridge.key)"
+```
+
+## 发版与自动更新
+
+```bash
+git tag v0.2.0 && git push origin v0.2.0
+```
+
+推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会：
+
+1. 按 tag 设置版本号，在 Windows / macOS（universal）/ Linux 上打包；
+2. 上传到同一个草稿 Release，并生成更新清单 `latest.json`（带签名）；
+3. 三个平台全部成功后正式发布。
+
+客户端（正式版）启动 30 秒后检查一次更新，之后每 6 小时检查一次（走设置里的出口代理）。
+发现新版本时主窗口顶部出现提示并发一次系统通知，点「立即更新」后先撤销接管、停止代理，再安装并重启。
+设置面板里可以看到当前版本号和「检查更新」按钮。
+
+仓库 Secrets 需要 `TAURI_SIGNING_PRIVATE_KEY`（私钥文件内容）。私钥丢失后已安装的客户端将无法再验证更新，务必备份。
 
 目录结构：
 

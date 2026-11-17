@@ -8,6 +8,7 @@ pub mod platform;
 pub mod shutdown;
 pub mod supervisor;
 pub mod tray;
+pub mod updater;
 
 use auth_status::{AuthState, inspect_auth};
 use config::AppConfig;
@@ -127,6 +128,26 @@ fn finish_onboarding(app: AppHandle, ctl: Ctl, cfg: AppConfig) {
 }
 
 #[tauri::command]
+fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+#[tauri::command]
+fn get_update(st: State<'_, updater::UpdaterState>) -> Option<updater::UpdateInfo> {
+    st.info()
+}
+
+#[tauri::command]
+async fn check_update(app: AppHandle) -> Result<Option<updater::UpdateInfo>, String> {
+    updater::check(&app).await
+}
+
+#[tauri::command]
+async fn install_update(app: AppHandle) -> Result<(), String> {
+    updater::install(app).await
+}
+
+#[tauri::command]
 fn hide_window(app: AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
@@ -159,6 +180,8 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::UpdaterState::default())
         .setup(move |app| {
             let handle = app.handle().clone();
             let home = dirs::home_dir().expect("home dir");
@@ -179,6 +202,7 @@ pub fn run() {
             }
             app.manage(ctl.clone());
             ctl.notify();
+            updater::spawn_background(handle.clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -201,7 +225,11 @@ pub fn run() {
             test_outbound,
             preview_start,
             finish_onboarding,
-            hide_window
+            hide_window,
+            app_version,
+            get_update,
+            check_update,
+            install_update
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

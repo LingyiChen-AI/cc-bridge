@@ -51,6 +51,18 @@
         "bannerPath": "icons/installer/wix-banner.bmp",
         "dialogImagePath": "icons/installer/wix-dialog.bmp"
       }
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEYzQzUyOTMzQkJGNkFDQzUKUldURnJQYTdNeW5GODlZeEtSOFg2T0dPNFVXRGYwbi9RZTQrZ3VrZks1bHdPUDBnRjFOMU5mVzUK",
+      "endpoints": [
+        "https://github.com/LingyiChen-AI/cc-bridge/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

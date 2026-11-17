@@ -1,4 +1,4 @@
-import { invoke, onStatus, type AppConfig, type AuthState, type EnvReport, type ProxyState, type Status } from './api';
+import { invoke, onEvent, onStatus, type UpdateInfo, type AppConfig, type AuthState, type EnvReport, type ProxyState, type Status } from './api';
 import { icon } from './icons';
 import { LANGS, setLang, t, trError } from './i18n';
 import { toast } from './toast';
@@ -12,6 +12,9 @@ const app = document.getElementById('app')!;
 const esc = (s: unknown) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 let status: Status | null = null;
+let appVersion = '';
+let update: UpdateInfo | null = null;
+let updatePct: number | null = null;
 
 // ───────── 状态文案 ─────────
 function proxyInfo(p: ProxyState, port: number): Info {
@@ -86,6 +89,11 @@ function renderMain(s: Status) {
     alerts.push(alert('err', t('loginTitle'), s.authHint ? `<code>${esc(s.authHint)}</code>` : esc(authReason(s.auth)), `<button class="btn" data-act="login">codex login</button>`));
   }
   if (s.networkHint) alerts.push(alert('warn', t('netTitle'), `${t('netBody')}<br><code>${esc(s.networkHint)}</code>`, ''));
+  if (update) {
+    const busy = updatePct !== null;
+    alerts.push(alert('info', t('updTitle', { version: update.version }), esc(t('updBody', { current: update.current })),
+      `<button class="btn pri" data-act="install-update" ${busy ? 'disabled' : ''}>${busy ? t('updDownloading', { pct: updatePct ?? 0 }) : t('updNow')}</button>`));
+  }
   if (s.devMode) {
     const cmd = `claude --settings "${s.settingsPath}"`;
     alerts.push(alert('info', t('devTitle'), `${t('devBody')}<br><code>${esc(cmd)}</code>`,
@@ -184,6 +192,8 @@ function mountSettings(cfg: AppConfig) {
         <div class="field" style="flex:1"><label>${t('autostart')}</label>
           <div style="height:32px;display:flex;align-items:center"><label class="switch"><input type="checkbox" id="f-auto" ${d.autostart ? 'checked' : ''} aria-label="${t('autostart')}"><span></span></label></div></div>
       </div>
+      <div class="row ver"><span>${t('version', { v: appVersion })}</span>
+        <button class="act" data-act="check-update">${icon.refresh(13)} ${t('checkUpdate')}</button></div>
       <div class="row" style="justify-content:flex-end;margin-top:8px;${dirty ? '' : 'display:none'}" id="settings-actions">
         <button class="btn ghost" data-act="settings-reset">${t('cancel')}</button>
         <button class="btn pri" data-act="settings-save">${t('saveApply')}</button>
@@ -347,6 +357,23 @@ async function act(name: string, target: HTMLElement) {
         toast(t('toastSaved'));
         break;
       }
+      case 'check-update': {
+        toast(t('checkUpdate'), 'loading');
+        try {
+          update = await invoke<UpdateInfo | null>('check_update');
+          if (!update) toast(t('toastUpToDate'));
+          render();
+        } catch (e) { toast(t('toastCheckFail', { detail: String(e) }), 'error'); }
+        break;
+      }
+      case 'install-update':
+        updatePct = 0; render();
+        try { await invoke('install_update'); } catch (e) {
+          updatePct = null; render();
+          if (String(e) === 'upToDate') { update = null; render(); toast(t('toastUpToDate')); }
+          else toast(t('toastUpdateFail', { detail: String(e) }), 'error');
+        }
+        break;
       case 'wiz-next': syncWizardInputs(); wiz.step++; if (wiz.step === 3) startPreview(); render(); break;
       case 'wiz-back': syncWizardInputs(); wiz.step--; render(); break;
       case 'wiz-recheck': await loadEnv(); break;
@@ -395,9 +422,17 @@ onStatus('status-changed', (s) => {
 });
 
 installSelects();
+onEvent<UpdateInfo | null>('update-available', (u) => { update = u; if (status?.onboarded && shouldRerender()) render(); });
+onEvent<number>('update-progress', (p) => {
+  updatePct = p;
+  const b = document.querySelector('[data-act="install-update"]');
+  if (b) b.textContent = t('updDownloading', { pct: p });
+});
 
 (async () => {
   status = await invoke<Status>('get_status');
+  appVersion = await invoke<string>('app_version');
+  update = await invoke<UpdateInfo | null>('get_update');
   setLang(status.lang);
   // 仅浏览器预览（?mock=...）用：直接展开某个面板 / 下拉，方便截图检查
   const q = new URLSearchParams(location.search);

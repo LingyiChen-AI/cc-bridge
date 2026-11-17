@@ -238,3 +238,6 @@ button { cursor: pointer; }
 .sel-text { flex: 1; }
 .sel-hint { color: var(--text-3); font-size: 12px; }
 @media (prefers-color-scheme: dark) { .sel-pop { box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.7); } }
+
+/* 设置面板：版本号与检查更新 */
+.row.ver { align-items: center; justify-content: space-between; color: var(--text-3); font-size: 12px; margin-top: 4px; }
