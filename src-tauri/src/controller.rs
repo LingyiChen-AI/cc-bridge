@@ -59,14 +59,14 @@ fn now() -> i64 {
 }
 
 impl Controller {
-    pub fn new(app: AppHandle, sidecar: PathBuf, home: PathBuf, data_dir: PathBuf) -> Arc<Self> {
+    pub fn new(app: AppHandle, home: PathBuf, data_dir: PathBuf) -> Arc<Self> {
         let cfg_path = data_dir.join("config.json");
         let onboarded = cfg_path.exists();
         let cfg: AppConfig = load_json(&cfg_path);
         let rec: TakeoverRecord = load_json(&data_dir.join("takeover.json"));
         let (tx, rx) = mpsc::channel::<()>();
         let tx2 = tx.clone();
-        let sup = Supervisor::new(sidecar, home.clone(), cfg.clone(), move || {
+        let sup = Supervisor::new(home.clone(), cfg.clone(), move || {
             let _ = tx2.send(());
         });
         let me = Arc::new(Self {

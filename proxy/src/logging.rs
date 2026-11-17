@@ -104,6 +104,7 @@ impl Logger {
         }
 
         let line = Value::Object(body).to_string();
+        crate::overrides::emit_log(&line);
 
         let mirror_to_stderr = should_mirror_to_stderr(level);
         if mirror_to_stderr {

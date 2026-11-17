@@ -13,9 +13,12 @@ impl Default for DirResolverEnv {
         Self {
             platform: std::env::consts::OS.into(),
             env: std::env::vars().collect(),
-            home: std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| "/".to_string()),
+            home: crate::overrides::get()
+                .and_then(|o| o.home)
+                .map(|h| h.to_string_lossy().into_owned())
+                .or_else(|| std::env::var("HOME").ok())
+                .or_else(|| std::env::var("USERPROFILE").ok())
+                .unwrap_or_else(|| "/".to_string()),
         }
     }
 }

@@ -2,10 +2,8 @@ pub mod auth_status;
 pub mod claude_settings;
 pub mod config;
 pub mod controller;
-pub mod env_builder;
 pub mod log_buffer;
 pub mod platform;
-pub mod proc_guard;
 pub mod shutdown;
 pub mod supervisor;
 pub mod tray;
@@ -14,7 +12,7 @@ use auth_status::{AuthState, inspect_auth};
 use config::AppConfig;
 use controller::{Controller, StatusDto};
 use serde::Serialize;
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -148,12 +146,6 @@ pub fn quit(app: &AppHandle, ctl: &Arc<Controller>) {
     app.exit(0);
 }
 
-fn sidecar_path() -> PathBuf {
-    let exe = std::env::current_exe().expect("current exe");
-    let name = if cfg!(windows) { "claude-codex.exe" } else { "claude-codex" };
-    exe.parent().expect("exe dir").join(name)
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let hidden = std::env::args().any(|a| a == "--hidden");
@@ -170,7 +162,7 @@ pub fn run() {
             let handle = app.handle().clone();
             let home = dirs::home_dir().expect("home dir");
             let data_dir = app.path().app_data_dir()?.join(if config::DEV_MODE { "dev" } else { "" });
-            let ctl = Controller::new(handle.clone(), sidecar_path(), home, data_dir);
+            let ctl = Controller::new(handle.clone(), home, data_dir);
             let tray = tray::build(&handle, ctl.clone())?;
             ctl.set_status_listener(move |st| tray.update(st));
             if ctl.onboarded() {

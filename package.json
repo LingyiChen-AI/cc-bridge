@@ -7,10 +7,7 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri",
-    "predev": "node scripts/build-sidecar.mjs",
-    "prebuild": "node scripts/build-sidecar.mjs",
-    "build-sidecar": "node scripts/build-sidecar.mjs"
+    "tauri": "tauri"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

@@ -1,0 +1,11 @@
+[workspace]
+members = ["src-tauri", "proxy"]
+resolver = "2"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+# 代理在同一进程内运行：用 unwind，单个请求 panic 只影响该请求，不会让整个客户端退出
+panic = "unwind"
+strip = true

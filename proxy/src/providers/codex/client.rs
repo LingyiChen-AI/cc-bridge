@@ -536,6 +536,24 @@ struct ProxyEnvironment {
 
 impl ProxyEnvironment {
     fn from_env() -> Self {
+        if let Some(o) = crate::overrides::get()
+            && (o.direct || o.outbound_proxy.is_some())
+        {
+            let proxy = o
+                .outbound_proxy
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty() && !o.direct)
+                .and_then(normalize_proxy_url);
+            let no_proxy_value = proxy.as_ref().and(o.no_proxy.clone());
+            return Self {
+                http_proxy: proxy.clone(),
+                https_proxy: proxy,
+                all_proxy: None,
+                no_proxy: no_proxy_value.as_deref().and_then(reqwest::NoProxy::from_string),
+                no_proxy_value,
+            };
+        }
         if std::env::var_os("REQUEST_METHOD").is_some() {
             return Self {
                 http_proxy: None,

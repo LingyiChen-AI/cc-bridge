@@ -1,13 +1,12 @@
-//! 代理进程监护：拉起、健康检查、退避重启、日志收集、端口冲突识别。
-use crate::{config::AppConfig, env_builder::build_proxy_env, log_buffer::LogBuffer, proc_guard};
+//! 代理监护：在本进程内启动代理服务、健康检查、退避重启、日志收集、端口冲突识别。
+use crate::{config::AppConfig, log_buffer::LogBuffer};
+use claude_codex::overrides::{self, RuntimeOverrides};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
-    collections::{HashMap, VecDeque},
-    io::{BufRead, BufReader, Read},
+    collections::VecDeque,
     net::TcpListener,
-    path::PathBuf,
-    process::{Child, Command, Stdio},
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
@@ -44,7 +43,7 @@ pub fn next_delay(restarts_in_window: usize) -> Option<Duration> {
     [1, 2, 5, 10, 30].get(restarts_in_window).map(|s| Duration::from_secs(*s))
 }
 
-/// 解析上游 `CCP_LOG_STDERR` 的 JSON 行。成功请求返回 `Some(LogHint::None)`（用于清除旧提示），无关行返回 `None`。
+/// 解析代理结构化日志的 JSON 行。成功请求返回 `Some(LogHint::None)`（用于清除旧提示），无关行返回 `None`。
 pub fn classify_log_line(line: &str) -> Option<LogHint> {
     let v: Value = serde_json::from_str(line.trim()).ok()?;
     let msg = v.get("msg")?.as_str()?;
@@ -87,14 +86,31 @@ fn version_key(id: &str) -> Vec<u32> {
         .unwrap_or_default()
 }
 
+/// 由客户端配置得到代理的进程内覆盖：HOME、登录文件、出口代理全部显式传入，不依赖环境变量。
+pub fn proxy_overrides(cfg: &AppConfig, home: &Path) -> RuntimeOverrides {
+    RuntimeOverrides {
+        home: Some(home.to_path_buf()),
+        codex_auth_file: cfg.codex_home.as_ref().map(|d| d.join("auth.json")),
+        outbound_proxy: cfg.outbound().map(String::from),
+        no_proxy: Some("localhost,127.0.0.1,::1".into()),
+        direct: cfg.outbound().is_none(),
+    }
+}
+
+/// 一次运行中的代理服务。
+struct Running {
+    shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
 type Listener = Box<dyn Fn() + Send + Sync>;
 
 struct Inner {
-    sidecar: PathBuf,
     home: PathBuf,
+    rt: tokio::runtime::Runtime,
     cfg: Mutex<AppConfig>,
     state: Mutex<ProxyState>,
-    child: Mutex<Option<Child>>,
+    server: Mutex<Option<Running>>,
     models: Mutex<Vec<String>>,
     hint: Mutex<LogHint>,
     logs: LogBuffer,
@@ -107,20 +123,30 @@ struct Inner {
 pub struct Supervisor(Arc<Inner>);
 
 impl Supervisor {
-    pub fn new(sidecar: PathBuf, home: PathBuf, cfg: AppConfig, on_change: impl Fn() + Send + Sync + 'static) -> Self {
-        Self(Arc::new(Inner {
-            sidecar,
+    pub fn new(home: PathBuf, cfg: AppConfig, on_change: impl Fn() + Send + Sync + 'static) -> Self {
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(4)
+            .thread_name("codex-proxy")
+            .enable_all()
+            .build()
+            .expect("tokio runtime");
+        let me = Self(Arc::new(Inner {
             home,
+            rt,
             cfg: Mutex::new(cfg),
             state: Mutex::new(ProxyState::Stopped),
-            child: Mutex::new(None),
+            server: Mutex::new(None),
             models: Mutex::new(vec![]),
             hint: Mutex::new(LogHint::None),
             logs: LogBuffer::default(),
             restarts: Mutex::new(VecDeque::new()),
             generation: AtomicU64::new(0),
             on_change: Box::new(on_change),
-        }))
+        }));
+        // 代理的每条结构化日志都进入界面日志，并参与 401 / 网络错误识别
+        let sink = me.clone();
+        overrides::set_log_sink(move |line| sink.log(line.to_string()));
+        me
     }
 
     pub fn state(&self) -> ProxyState {
@@ -164,10 +190,10 @@ impl Supervisor {
         self.start();
     }
 
-    /// 同步结束代理进程。
+    /// 同步停止代理服务。
     pub fn stop(&self) {
         self.0.generation.fetch_add(1, Ordering::SeqCst);
-        self.kill_child();
+        self.stop_server();
         self.set_state(ProxyState::Stopped);
     }
 
@@ -213,10 +239,25 @@ impl Supervisor {
         self.0.logs.push(line);
     }
 
-    fn kill_child(&self) {
-        if let Some(mut c) = self.0.child.lock().unwrap().take() {
-            let _ = c.kill();
-            let _ = c.wait();
+    fn stop_server(&self) {
+        let Some(mut running) = self.0.server.lock().unwrap().take() else { return };
+        if let Some(tx) = running.shutdown.take() {
+            let _ = tx.send(());
+        }
+        // 优雅关闭最多等 3 秒，超时直接中止（长连接流式请求可能一直不结束）
+        let task = running.task;
+        let finished = self.0.rt.block_on(async {
+            let abort = task.abort_handle();
+            match tokio::time::timeout(Duration::from_secs(3), task).await {
+                Ok(_) => true,
+                Err(_) => {
+                    abort.abort();
+                    false
+                }
+            }
+        });
+        if !finished {
+            self.log("[codex-bridge] 代理未能在 3 秒内退出，已强制中止".into());
         }
     }
 
@@ -246,11 +287,9 @@ impl Supervisor {
                 return;
             }
             self.set_state(ProxyState::Starting);
-            match self.spawn(port) {
-                Ok(()) => self.watch(generation, &client),
-                Err(e) => self.log(format!("[codex-bridge] 启动代理失败：{e}")),
-            }
-            self.kill_child();
+            self.spawn(port);
+            self.watch(generation, &client);
+            self.stop_server();
             if !self.alive(generation) {
                 return;
             }
@@ -280,47 +319,38 @@ impl Supervisor {
         }
     }
 
-    fn spawn(&self, port: u16) -> std::io::Result<()> {
+    fn spawn(&self, port: u16) {
         let cfg = self.0.cfg.lock().unwrap().clone();
-        let base: HashMap<String, String> = std::env::vars().collect();
-        let mut cmd = Command::new(&self.0.sidecar);
-        cmd.args(["serve", "--no-monitor", "--port", &port.to_string()])
-            .env_clear()
-            .envs(build_proxy_env(&base, &self.0.home, &cfg))
-            .current_dir(&self.0.home)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        proc_guard::prepare(&mut cmd);
-        let mut child = cmd.spawn()?;
-        proc_guard::attach_kill_on_close(&child);
-        self.log(format!("[codex-bridge] 代理已启动 pid={} 端口 {port}", child.id()));
-        if let Some(out) = child.stdout.take() {
-            self.pipe(out);
-        }
-        if let Some(err) = child.stderr.take() {
-            self.pipe(err);
-        }
-        *self.0.child.lock().unwrap() = Some(child);
-        Ok(())
+        overrides::set(proxy_overrides(&cfg, &self.0.home));
+        let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+        let config = claude_codex::server::ServerConfig { bind_address: "127.0.0.1".into(), port, monitor: None };
+        let task = self.0.rt.spawn(claude_codex::server::serve_with_shutdown(config, async {
+            let _ = rx.await;
+        }));
+        self.log(format!(
+            "[codex-bridge] 代理已在进程内启动 端口 {port} 出口 {}",
+            cfg.outbound().unwrap_or("直连")
+        ));
+        *self.0.server.lock().unwrap() = Some(Running { shutdown: Some(tx), task });
     }
 
-    fn pipe(&self, r: impl Read + Send + 'static) {
-        let me = self.clone();
-        thread::spawn(move || {
-            for line in BufReader::new(r).lines().map_while(Result::ok) {
-                if !line.trim().is_empty() {
-                    me.log(line);
-                }
-            }
-        });
-    }
-
+    /// 代理服务任务已结束（启动失败、panic 或被关闭）。
     fn exited(&self) -> bool {
-        match self.0.child.lock().unwrap().as_mut() {
-            Some(c) => !matches!(c.try_wait(), Ok(None)),
-            None => true,
+        let mut guard = self.0.server.lock().unwrap();
+        let Some(running) = guard.as_mut() else { return true };
+        if !running.task.is_finished() {
+            return false;
         }
+        let task = guard.take().unwrap().task;
+        let msg = match self.0.rt.block_on(task) {
+            Ok(Ok(())) => "代理服务已退出".to_string(),
+            Ok(Err(e)) => format!("代理服务出错退出：{e:#}"),
+            Err(e) if e.is_panic() => "代理服务发生 panic".to_string(),
+            Err(e) => format!("代理服务被中止：{e}"),
+        };
+        drop(guard);
+        self.log(format!("[codex-bridge] {msg}"));
+        true
     }
 
     /// 返回即表示需要重启（或已被 stop）。
@@ -347,7 +377,6 @@ impl Supervisor {
                 return;
             }
             if self.exited() {
-                self.log("[codex-bridge] 代理进程已退出".into());
                 return;
             }
             if self.probe(client, &url) {
@@ -407,6 +436,22 @@ fn process_name(pid: u32) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overrides_from_config() {
+        let home = Path::new(r"C:\Users\张 三");
+        let mut cfg = AppConfig { outbound_proxy: Some("http://127.0.0.1:7890".into()), ..Default::default() };
+        let o = proxy_overrides(&cfg, home);
+        assert_eq!(o.home.as_deref(), Some(home));
+        assert_eq!(o.outbound_proxy.as_deref(), Some("http://127.0.0.1:7890"));
+        assert!(!o.direct);
+        assert_eq!(o.codex_auth_file, None);
+        cfg.outbound_proxy = Some("  ".into());
+        cfg.codex_home = Some(PathBuf::from("D:/codex"));
+        let o = proxy_overrides(&cfg, home);
+        assert!(o.direct && o.outbound_proxy.is_none());
+        assert_eq!(o.codex_auth_file, Some(PathBuf::from("D:/codex").join("auth.json")));
+    }
 
     #[test]
     fn backoff_sequence() {

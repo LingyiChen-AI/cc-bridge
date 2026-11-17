@@ -5,6 +5,7 @@ pub mod inbound_auth;
 pub mod logging;
 pub mod monitor;
 pub mod openai_compat;
+pub mod overrides;
 pub mod paths;
 pub mod project;
 pub mod provider;

@@ -27,3 +27,4 @@ src-tauri/binaries/
 src-tauri/target/
 .superpowers/
 proxy/target/
+target/

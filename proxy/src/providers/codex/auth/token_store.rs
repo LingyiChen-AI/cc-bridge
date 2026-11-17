@@ -168,6 +168,16 @@ pub type DefaultCodexAuthStore = CodexCliAuthStore;
 
 /// Locate the Codex CLI credential file, honoring `$CODEX_HOME` (and a test override).
 pub fn codex_auth_file() -> PathBuf {
+    if let Some(o) = crate::overrides::get() {
+        if let Some(file) = o.codex_auth_file {
+            return file;
+        }
+        if let Some(home) = o.home {
+            if std::env::var_os("CODEX_HOME").is_none() && std::env::var_os("CCP_CODEX_AUTH_FILE").is_none() {
+                return home.join(".codex").join("auth.json");
+            }
+        }
+    }
     if let Some(explicit) = std::env::var_os("CCP_CODEX_AUTH_FILE") {
         return PathBuf::from(explicit);
     }
