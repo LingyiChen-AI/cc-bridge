@@ -19,7 +19,6 @@ const base: Status = {
   models,
   selectedModels: models.slice(0, 6),
   config: { port: 18765, outbound_proxy: 'http://127.0.0.1:7890', codex_home: null, claude_dir: null, autostart: true, takeover: true, selected_models: null },
-  upstreamVersion: 'v0.8.0',
   logsTail: [
     '[codex-bridge] 代理已启动 pid=27632 端口 18765',
     '{"level":"info","msg":"server listening","fields":{"port":18765}}',

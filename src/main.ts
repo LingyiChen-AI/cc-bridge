@@ -129,7 +129,7 @@ function renderMain(s: Status) {
   const logs = panel === 'logs' ? `
     <section class="panel">
       <div class="logs" id="logs">${s.logsTail.map(logLine).join('\n') || '暂无日志'}</div>
-      <div class="row between" style="margin-top:8px"><span style="color:var(--text-3);font-size:12px">上游 claude-codex ${esc(s.upstreamVersion)}</span>
+      <div class="row" style="margin-top:8px;justify-content:flex-end">
         <button class="btn" data-act="copy-logs">${icon.copy(14)} 复制全部</button></div>
     </section>` : '';
 

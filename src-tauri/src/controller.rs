@@ -31,7 +31,6 @@ pub struct StatusDto {
     pub models: Vec<String>,
     pub selected_models: Vec<String>,
     pub config: AppConfig,
-    pub upstream_version: String,
     pub logs_tail: Vec<String>,
     pub onboarded: bool,
     pub dev_mode: bool,
@@ -51,8 +50,6 @@ pub struct Controller {
     shut: AtomicBool,
     on_status: Mutex<Option<Box<dyn Fn(&StatusDto) + Send>>>,
 }
-
-pub const UPSTREAM_VERSION: &str = "v0.8.0";
 
 fn now() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -269,7 +266,6 @@ impl Controller {
             selected_models: cfg.effective_models(&self.sup.models()),
             models: self.sup.models(),
             config: cfg,
-            upstream_version: UPSTREAM_VERSION.into(),
             logs_tail: self.sup.logs_tail(200),
             onboarded: self.onboarded(),
             dev_mode: crate::config::DEV_MODE,

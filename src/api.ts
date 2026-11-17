@@ -38,7 +38,6 @@ export interface Status {
   models: string[];
   selectedModels: string[];
   config: AppConfig;
-  upstreamVersion: string;
   logsTail: string[];
   onboarded: boolean;
   devMode: boolean;
