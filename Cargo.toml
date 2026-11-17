@@ -3,8 +3,8 @@ members = ["src-tauri", "proxy"]
 resolver = "2"
 
 [profile.release]
-codegen-units = 1
-lto = true
+# thin LTO + 默认并行 codegen：体积和性能差别很小，CI 编译时间约减半
+lto = "thin"
 opt-level = 3
 # 代理在同一进程内运行：用 unwind，单个请求 panic 只影响该请求，不会让整个客户端退出
 panic = "unwind"

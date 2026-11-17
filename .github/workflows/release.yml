@@ -1,5 +1,8 @@
-# 推送 v* tag 时：三个平台打包 → 上传到同一个草稿 Release（含更新清单 latest.json）→ 全部成功后正式发布。
-# 客户端的自动更新读的是 releases/latest/download/latest.json，所以只有正式发布后用户才会收到更新。
+# 推送 v* tag 时：Windows + macOS（Apple 芯片 / Intel 各一个包）并行打包 → 上传到同一个草稿 Release（含更新清单 latest.json）
+# → 全部成功后正式发布。客户端的自动更新读的是 releases/latest/download/latest.json，所以只有正式发布后用户才会收到更新。
+#
+# 编译缓存：tag 触发的运行只能读取默认分支（master）的缓存，由 build-cache.yml 在 master 上预热；
+# 这里共用同一个 shared-key 只读不写。
 name: Release
 
 on:
@@ -20,33 +23,29 @@ jobs:
       matrix:
         include:
           - platform: windows-latest
-            args: ''
+            target: x86_64-pc-windows-msvc
           - platform: macos-latest
-            args: '--target universal-apple-darwin'
-          - platform: ubuntu-22.04
-            args: ''
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+    name: build (${{ matrix.target }})
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - name: 安装 Linux 依赖
-        if: matrix.platform == 'ubuntu-22.04'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.target }}
 
       - uses: swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.platform }}
+          shared-key: release-${{ matrix.target }}
+          save-if: false
 
       - run: npm ci
 
@@ -65,14 +64,15 @@ jobs:
           releaseBody: |
             ## 下载
             - Windows：`CC.Bridge_*_x64-setup.exe`（推荐）或 `.msi`
-            - macOS：`CC.Bridge_*_universal.dmg`（未签名，首次打开需在「系统设置 → 隐私与安全性」里允许）
-            - Linux：`.AppImage` / `.deb`
+            - macOS Apple 芯片（M 系列）：`CC.Bridge_*_aarch64.dmg`
+            - macOS Intel：`CC.Bridge_*_x64.dmg`
 
+            macOS 包未签名，首次打开需在「系统设置 → 隐私与安全性」里点「仍要打开」。
             已安装的客户端会自动检测到这个版本，在主窗口点「立即更新」即可。
           releaseDraft: true
           prerelease: false
           includeUpdaterJson: true
-          args: ${{ matrix.args }}
+          args: --target ${{ matrix.target }}
 
   publish:
     needs: build

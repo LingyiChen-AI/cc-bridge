@@ -1,0 +1,47 @@
+# master 有新提交时，按发版同样的方式编译一遍（不打安装包），把依赖编译结果存进缓存。
+# tag 触发的发版只能读默认分支的缓存，有了这份缓存，发版时依赖不用从头编译。
+name: Build cache
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: build-cache
+  cancel-in-progress: true
+
+jobs:
+  warm:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            target: x86_64-pc-windows-msvc
+          - platform: macos-latest
+            target: aarch64-apple-darwin
+          - platform: macos-latest
+            target: x86_64-apple-darwin
+    name: warm (${{ matrix.target }})
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - run: npm ci
+
+      # 与发版相同的 profile 和 features（tauri build 会带 custom-protocol），只是不打包
+      - run: npx tauri build --no-bundle --target ${{ matrix.target }}

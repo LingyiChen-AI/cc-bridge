@@ -31,9 +31,9 @@ git tag v0.2.0 && git push origin v0.2.0
 
 推送 `v*` tag 后，GitHub Actions（`.github/workflows/release.yml`）会：
 
-1. 按 tag 设置版本号，在 Windows / macOS（universal）/ Linux 上打包；
+1. 按 tag 设置版本号，并行打包 Windows、macOS Apple 芯片、macOS Intel 三个版本；
 2. 上传到同一个草稿 Release，并生成更新清单 `latest.json`（带签名）；
-3. 三个平台全部成功后正式发布。
+3. 全部成功后正式发布。master 每次推送会由 `build-cache.yml` 预热编译缓存，发版时依赖不用从头编译。
 
 客户端（正式版）启动 30 秒后检查一次更新，之后每 6 小时检查一次（走设置里的出口代理）。
 发现新版本时主窗口顶部出现提示并发一次系统通知，点「立即更新」后先撤销接管、停止代理，再安装并重启。
