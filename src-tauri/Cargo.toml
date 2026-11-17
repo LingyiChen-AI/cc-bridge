@@ -20,7 +20,7 @@ tauri-plugin-notification = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "socks"] }
 tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros"] }
 base64 = "0.22"
 dirs = "6"

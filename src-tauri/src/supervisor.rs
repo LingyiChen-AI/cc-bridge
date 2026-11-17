@@ -125,6 +125,10 @@ impl Supervisor {
         *self.0.cfg.lock().unwrap() = cfg;
     }
 
+    pub fn note(&self, line: String) {
+        self.log(line);
+    }
+
     pub fn start(&self) {
         let generation = self.0.generation.fetch_add(1, Ordering::SeqCst) + 1;
         let me = self.clone();

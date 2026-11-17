@@ -1,0 +1,331 @@
+//! 应用编排：唯一会改 settings.json 的地方；汇总状态推给前端和托盘。
+use crate::{
+    auth_status::{AuthState, auth_file, inspect_auth},
+    claude_settings::{SettingsError, apply_takeover, has_leftover, is_taken_over, read_settings, revoke_takeover, write_settings},
+    config::{AppConfig, TakeoverRecord, load_json, save_json},
+    supervisor::{LogHint, ProxyState, Supervisor},
+};
+use serde::Serialize;
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct StatusDto {
+    pub proxy: ProxyState,
+    pub port: u16,
+    pub auth: AuthState,
+    pub auth_path: String,
+    pub auth_hint: Option<String>,
+    pub network_hint: Option<String>,
+    pub takeover: bool,
+    pub taken_over: bool,
+    pub settings_path: String,
+    pub settings_error: Option<String>,
+    pub models: Vec<String>,
+    pub config: AppConfig,
+    pub upstream_version: String,
+    pub logs_tail: Vec<String>,
+    pub onboarded: bool,
+}
+
+pub struct Controller {
+    pub app: AppHandle,
+    pub sup: Supervisor,
+    home: PathBuf,
+    data_dir: PathBuf,
+    cfg: Mutex<AppConfig>,
+    rec: Mutex<TakeoverRecord>,
+    onboarded: AtomicBool,
+    settings_error: Mutex<Option<String>>,
+    auth: Mutex<AuthState>,
+    tx: mpsc::Sender<()>,
+    shut: AtomicBool,
+    on_status: Mutex<Option<Box<dyn Fn(&StatusDto) + Send>>>,
+}
+
+pub const UPSTREAM_VERSION: &str = "v0.8.0";
+
+fn now() -> i64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
+}
+
+impl Controller {
+    pub fn new(app: AppHandle, sidecar: PathBuf, home: PathBuf, data_dir: PathBuf) -> Arc<Self> {
+        let cfg_path = data_dir.join("config.json");
+        let onboarded = cfg_path.exists();
+        let cfg: AppConfig = load_json(&cfg_path);
+        let rec: TakeoverRecord = load_json(&data_dir.join("takeover.json"));
+        let (tx, rx) = mpsc::channel::<()>();
+        let tx2 = tx.clone();
+        let sup = Supervisor::new(sidecar, home.clone(), cfg.clone(), move || {
+            let _ = tx2.send(());
+        });
+        let me = Arc::new(Self {
+            app,
+            sup,
+            home,
+            data_dir,
+            cfg: Mutex::new(cfg),
+            rec: Mutex::new(rec),
+            onboarded: AtomicBool::new(onboarded),
+            settings_error: Mutex::new(None),
+            auth: Mutex::new(AuthState::Missing { reason: String::new() }),
+            tx,
+            shut: AtomicBool::new(false),
+            on_status: Mutex::new(None),
+        });
+        me.refresh_auth();
+        // 崩溃恢复：上次没撤销干净的先撤销
+        me.revoke_now();
+        let worker = me.clone();
+        std::thread::spawn(move || worker.event_loop(rx));
+        me
+    }
+
+    pub fn set_status_listener(&self, f: impl Fn(&StatusDto) + Send + 'static) {
+        *self.on_status.lock().unwrap() = Some(Box::new(f));
+    }
+
+    pub fn notify(&self) {
+        let _ = self.tx.send(());
+    }
+
+    pub fn config(&self) -> AppConfig {
+        self.cfg.lock().unwrap().clone()
+    }
+    pub fn onboarded(&self) -> bool {
+        self.onboarded.load(Ordering::SeqCst)
+    }
+    pub fn home(&self) -> &Path {
+        &self.home
+    }
+
+    fn settings_path(&self) -> PathBuf {
+        self.config().claude_settings_path(&self.home)
+    }
+
+    pub fn auth_path(&self) -> PathBuf {
+        let env: HashMap<String, String> = std::env::vars().collect();
+        auth_file(self.config().codex_home.as_deref(), &env, &self.home)
+    }
+
+    fn event_loop(self: Arc<Self>, rx: mpsc::Receiver<()>) {
+        let mut last_mtime = None;
+        loop {
+            match rx.recv_timeout(Duration::from_secs(5)) {
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                Ok(()) => while rx.try_recv().is_ok() {},
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+            }
+            if self.shut.load(Ordering::SeqCst) {
+                continue;
+            }
+            let mtime = std::fs::metadata(self.auth_path()).and_then(|m| m.modified()).ok();
+            let auth_changed = mtime != last_mtime;
+            last_mtime = mtime;
+            if auth_changed {
+                let was_missing = matches!(*self.auth.lock().unwrap(), AuthState::Missing { .. });
+                self.refresh_auth();
+                let now_ok = !matches!(*self.auth.lock().unwrap(), AuthState::Missing { .. });
+                if was_missing && now_ok && self.onboarded() && self.sup.state() != ProxyState::Stopped {
+                    self.sup.restart();
+                }
+            }
+            self.reconcile();
+            self.publish();
+        }
+    }
+
+    fn refresh_auth(&self) {
+        let st = inspect_auth(&self.auth_path(), now());
+        *self.auth.lock().unwrap() = st;
+    }
+
+    fn save_record(&self, rec: &TakeoverRecord) {
+        let _ = save_json(&self.data_dir.join("takeover.json"), rec);
+    }
+
+    /// 让 settings.json 与期望状态一致。
+    pub fn reconcile(&self) {
+        if self.shut.load(Ordering::SeqCst) {
+            return;
+        }
+        let cfg = self.config();
+        let state = self.sup.state();
+        let models = self.sup.models();
+        let want = self.onboarded() && cfg.takeover && state == ProxyState::Running && !models.is_empty();
+        let failed = matches!(state, ProxyState::Failed { .. });
+        if want {
+            self.apply_now(&models);
+        } else if failed || !cfg.takeover || !self.onboarded() {
+            if self.revoke_now() && failed {
+                let _ = self
+                    .app
+                    .notification()
+                    .builder()
+                    .title("Codex Bridge：代理不可用")
+                    .body("已临时撤销对 Claude Code 的接管，新开的 Claude Code 窗口只用 Claude 模型。")
+                    .show();
+            }
+        }
+    }
+
+    fn apply_now(&self, models: &[String]) {
+        let path = self.settings_path();
+        let mut doc = match read_settings(&path) {
+            Ok(d) => d,
+            Err(e) => return self.set_settings_error(Some(e)),
+        };
+        let before = doc.clone();
+        let mut rec = self.rec.lock().unwrap();
+        let mut next = rec.clone();
+        apply_takeover(&mut doc, &mut next, &self.sup.base_url(), models);
+        if doc != before {
+            // 先落记录再改文件：即使中途崩溃，下次也能识别并撤销
+            self.save_record(&next);
+            if let Err(e) = write_settings(&path, &doc) {
+                return self.set_settings_error(Some(SettingsError::Io(e)));
+            }
+        } else if next != *rec {
+            self.save_record(&next);
+        }
+        *rec = next;
+        self.set_settings_error(None);
+    }
+
+    /// 返回是否真的撤销了内容。
+    pub fn revoke_now(&self) -> bool {
+        let mut rec = self.rec.lock().unwrap();
+        if rec.base_url.is_none() && rec.models.is_empty() {
+            return false;
+        }
+        let path = self.settings_path();
+        let mut doc = match read_settings(&path) {
+            Ok(d) => d,
+            Err(e) => {
+                self.set_settings_error(Some(e));
+                return false;
+            }
+        };
+        if !has_leftover(&doc, &rec) {
+            *rec = TakeoverRecord::default();
+            self.save_record(&rec);
+            return false;
+        }
+        let before = doc.clone();
+        let warnings = revoke_takeover(&mut doc, &mut rec);
+        if doc != before {
+            if let Err(e) = write_settings(&path, &doc) {
+                self.set_settings_error(Some(SettingsError::Io(e)));
+                return false;
+            }
+        }
+        self.save_record(&rec);
+        for w in warnings {
+            self.sup.note(format!("[codex-bridge] {w}"));
+        }
+        doc != before
+    }
+
+    fn set_settings_error(&self, e: Option<SettingsError>) {
+        *self.settings_error.lock().unwrap() = e.map(|e| e.to_string());
+    }
+
+    pub fn status(&self) -> StatusDto {
+        let cfg = self.config();
+        let path = self.settings_path();
+        let taken_over = read_settings(&path).map(|d| is_taken_over(&d, &self.rec.lock().unwrap())).unwrap_or(false);
+        let (auth_hint, network_hint) = match self.sup.last_hint() {
+            LogHint::Auth401(m) => (Some(m), None),
+            LogHint::UpstreamNetwork(m) => (None, Some(m)),
+            LogHint::None => (None, None),
+        };
+        StatusDto {
+            proxy: self.sup.state(),
+            port: cfg.port,
+            auth: self.auth.lock().unwrap().clone(),
+            auth_path: self.auth_path().to_string_lossy().into_owned(),
+            auth_hint,
+            network_hint,
+            takeover: cfg.takeover,
+            taken_over,
+            settings_path: path.to_string_lossy().into_owned(),
+            settings_error: self.settings_error.lock().unwrap().clone(),
+            models: self.sup.models(),
+            config: cfg,
+            upstream_version: UPSTREAM_VERSION.into(),
+            logs_tail: self.sup.logs_tail(200),
+            onboarded: self.onboarded(),
+        }
+    }
+
+    pub fn publish(&self) {
+        let st = self.status();
+        let _ = self.app.emit("status-changed", &st);
+        if let Some(f) = self.on_status.lock().unwrap().as_ref() {
+            f(&st);
+        }
+    }
+
+    pub fn set_takeover(&self, on: bool) {
+        let mut cfg = self.config();
+        cfg.takeover = on;
+        self.store_config(cfg);
+        self.notify();
+    }
+
+    fn store_config(&self, cfg: AppConfig) {
+        let _ = save_json(&self.data_dir.join("config.json"), &cfg);
+        *self.cfg.lock().unwrap() = cfg.clone();
+        self.sup.set_config(cfg);
+    }
+
+    /// 保存设置；影响代理或 settings.json 位置的改动会先撤销再重启代理。
+    pub fn save_config(&self, cfg: AppConfig) {
+        let old = self.config();
+        let restart = old.port != cfg.port || old.outbound() != cfg.outbound() || old.codex_home != cfg.codex_home;
+        if restart || old.claude_dir != cfg.claude_dir {
+            self.revoke_now();
+        }
+        self.store_config(cfg);
+        self.onboarded.store(true, Ordering::SeqCst);
+        if restart {
+            self.sup.restart();
+        }
+        self.refresh_auth();
+        self.notify();
+    }
+
+    /// 引导第 4 步：按引导里的配置先启动代理（尚不保存、不接管）。
+    pub fn preview_start(&self, cfg: AppConfig) {
+        *self.cfg.lock().unwrap() = cfg.clone();
+        self.sup.set_config(cfg);
+        self.refresh_auth();
+        self.sup.restart();
+    }
+
+    pub fn finish_onboarding(&self, cfg: AppConfig) {
+        self.store_config(cfg);
+        self.onboarded.store(true, Ordering::SeqCst);
+        if self.sup.state() == ProxyState::Stopped {
+            self.sup.start();
+        }
+        self.notify();
+    }
+
+    /// 退出 / 关机：撤销接管并结束代理。可重复调用。
+    pub fn shutdown(&self) {
+        if self.shut.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        self.revoke_now();
+        self.sup.stop();
+    }
+}
