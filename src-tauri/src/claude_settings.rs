@@ -99,10 +99,23 @@ pub fn apply_takeover(doc: &mut Value, rec: &mut TakeoverRecord, base_url: &str,
     rec.models = models.to_vec();
 }
 
+/// Claude Code 自己的模型名：别名（opus / sonnet / haiku / fable / opusplan / default …）或 claude-* 完整 ID，可带 [1m] 之类后缀。
+pub fn is_claude_model(m: &str) -> bool {
+    let m = m.trim().to_ascii_lowercase();
+    let base = m.split('[').next().unwrap_or("").trim();
+    base.is_empty()
+        || base.starts_with("claude")
+        || ["default", "best", "opusplan"].contains(&base)
+        || ["opus", "sonnet", "haiku", "fable"].iter().any(|f| base == *f || base.starts_with(&format!("{f}-")))
+        || base.contains("anthropic")
+}
+
 pub fn revoke_takeover(doc: &mut Value, rec: &mut TakeoverRecord) -> Vec<String> {
     let mut warnings = Vec::new();
     let root = obj(doc);
-    let ours = |m: &str| rec.models.iter().any(|x| x == m);
+    // 接管期间 base_url 指向本代理，此时 model 里任何非 Claude 模型都只能是经由本代理选的 Codex 模型
+    // （包括以前勾选过、现在已取消勾选的，或在 /model 里手动输入的），一律恢复。
+    let ours = |m: &str| rec.models.iter().any(|x| x == m) || !is_claude_model(m);
 
     if root.get("model").and_then(Value::as_str).is_some_and(ours) {
         match rec.prev_model.clone().flatten() {
@@ -140,7 +153,9 @@ pub fn revoke_takeover(doc: &mut Value, rec: &mut TakeoverRecord) -> Vec<String>
 
     if let Some(picker) = root.get_mut("modelPicker").and_then(Value::as_object_mut) {
         if let Some(arr) = picker.get_mut("options").and_then(Value::as_array_mut) {
-            arr.retain(|o| !o.get("model").and_then(Value::as_str).is_some_and(ours));
+            // 列表里只删本客户端写入的条目，用户自己加的保留
+            let written = |m: &str| rec.models.iter().any(|x| x == m);
+            arr.retain(|o| !o.get("model").and_then(Value::as_str).is_some_and(written));
             if arr.is_empty() && rec.created_picker {
                 picker.shift_remove("options");
             }
@@ -178,6 +193,42 @@ mod tests {
         let w = revoke_takeover(&mut doc, &mut rec);
         assert!(w.is_empty());
         assert_eq!(serde_json::to_string(&doc).unwrap(), serde_json::to_string(&original).unwrap());
+    }
+
+    #[test]
+    fn revoke_restores_model_not_in_current_selection() {
+        // 复现：选过 gpt-6.1-sol 后又取消勾选，撤销时顶层 model 残留，CC 新窗口不可用
+        let mut doc = json!({"model":"opus","env":{"HTTPS_PROXY":"x"}});
+        let mut rec = TakeoverRecord::default();
+        apply_takeover(&mut doc, &mut rec, URL, &models(&["gpt-6.2-sol", "gpt-6-sol"]));
+        doc["model"] = json!("gpt-6.1-sol");
+        doc["env"]["ANTHROPIC_MODEL"] = json!("gpt-5-codex");
+        revoke_takeover(&mut doc, &mut rec);
+        assert_eq!(doc, json!({"model":"opus","env":{"HTTPS_PROXY":"x"}}));
+    }
+
+    #[test]
+    fn revoke_keeps_user_claude_model_choice() {
+        let mut doc = json!({"model":"opus"});
+        let mut rec = TakeoverRecord::default();
+        apply_takeover(&mut doc, &mut rec, URL, &models(&["gpt-a"]));
+        for m in ["sonnet", "sonnet[1m]", "claude-opus-5-5", "haiku", "fable"] {
+            let mut d = doc.clone();
+            let mut r = rec.clone();
+            d["model"] = json!(m);
+            revoke_takeover(&mut d, &mut r);
+            assert_eq!(d["model"], m);
+        }
+    }
+
+    #[test]
+    fn claude_model_detection() {
+        for m in ["opus", "Sonnet", "opus[1m]", "opusplan", "default", "claude-sonnet-5-5", "haiku-5-5", "fable"] {
+            assert!(is_claude_model(m), "{m}");
+        }
+        for m in ["gpt-6.1-sol", "gpt-5-codex", "o3", "codex-mini"] {
+            assert!(!is_claude_model(m), "{m}");
+        }
     }
 
     #[test]
