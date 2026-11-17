@@ -5,6 +5,7 @@ pub mod controller;
 pub mod i18n;
 pub mod log_buffer;
 pub mod platform;
+pub mod proxy;
 pub mod shutdown;
 pub mod supervisor;
 pub mod tray;

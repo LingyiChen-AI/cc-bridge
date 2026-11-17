@@ -26,8 +26,8 @@ export default defineConfig(() => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      // workspace 编译产物（target/）和代理源码（proxy/）体积很大，不要让 Vite 监视
-      ignored: ["**/src-tauri/**", "**/target/**", "**/proxy/**", "**/.superpowers/**", "**/docs/**"],
+      // workspace 编译产物（target/）体积很大，不要让 Vite 监视
+      ignored: ["**/src-tauri/**", "**/target/**", "**/.superpowers/**", "**/docs/**"],
     },
   },
 }));

@@ -46,17 +46,16 @@ git tag v0.2.0 && git push origin v0.2.0
 ```
 src/          界面（原生 TypeScript + Vite）
 src/locales/  界面多语言
-src-tauri/    客户端（Rust / Tauri 2）：托盘、配置接管、代理监护
-proxy/        代理（Rust 库），由客户端在进程内启动
+src-tauri/    后端（Rust / Tauri 2）：托盘、配置接管、代理监护；src/proxy/ 是代理本身（模块）
 docs/         设计文档与实施计划
 ```
 
 ## 第三方代码
 
-`proxy/` 目录的代理源码来自开源项目
+`src-tauri/src/proxy/` 目录的代理源码来自开源项目
 [claude-code-with-codex](https://github.com/fcakyon/claude-code-with-codex) v0.8.0，
-以 MIT 协议授权，原始许可证见 [`proxy/LICENSE`](proxy/LICENSE)，来源说明见 [`proxy/NOTICE.md`](proxy/NOTICE.md)。
-本项目在其基础上删除了 Kimi / Cursor / Grok 后端，并改为进程内库运行。
+以 MIT 协议授权，原始许可证见 [`src-tauri/src/proxy/LICENSE`](src-tauri/src/proxy/LICENSE)，来源说明见 [`src-tauri/src/proxy/NOTICE.md`](src-tauri/src/proxy/NOTICE.md)。
+本项目在其基础上删除了 Kimi / Cursor / Grok 后端，并作为后端的一个模块直接编进客户端。
 
 ## 注意
 

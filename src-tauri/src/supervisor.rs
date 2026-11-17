@@ -1,6 +1,6 @@
 //! 代理监护：在本进程内启动代理服务、健康检查、退避重启、日志收集、端口冲突识别。
 use crate::{config::AppConfig, log_buffer::LogBuffer};
-use claude_codex::overrides::{self, RuntimeOverrides};
+use crate::proxy::overrides::{self, RuntimeOverrides};
 use serde::Serialize;
 use serde_json::Value;
 use std::{
@@ -323,8 +323,8 @@ impl Supervisor {
         let cfg = self.0.cfg.lock().unwrap().clone();
         overrides::set(proxy_overrides(&cfg, &self.0.home));
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let config = claude_codex::server::ServerConfig { bind_address: "127.0.0.1".into(), port, monitor: None };
-        let task = self.0.rt.spawn(claude_codex::server::serve_with_shutdown(config, async {
+        let config = crate::proxy::server::ServerConfig { bind_address: "127.0.0.1".into(), port, monitor: None };
+        let task = self.0.rt.spawn(crate::proxy::server::serve_with_shutdown(config, async {
             let _ = rx.await;
         }));
         self.log(format!(
