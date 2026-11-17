@@ -42,132 +42,125 @@ function takeoverInfo(s: Status): { tone: Tone; value: string; meta: string } {
 }
 
 // ───────── 主界面 ─────────
+// logo ③：白色 >（Codex）接陶土橙 >（Claude Code）
+const LOGO = `<svg class="logo" viewBox="0 0 100 100" aria-hidden="true"><rect x="4" y="4" width="92" height="92" rx="22" fill="#141414"/>
+<path d="M22 30 L42 50 L22 70" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+<path d="M48 30 L68 50 L48 70" fill="none" stroke="#D97757" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+<rect x="72" y="62" width="10" height="8" rx="3" fill="#D97757"/></svg>`;
+
+let panel: 'none' | 'logs' | 'settings' = 'none';
+let modelsExpanded = false;
+const MODEL_PREVIEW = 4;
+
+const topBar = (right: string, tag = '') =>
+  `<div class="top">${LOGO}<b>Codex Bridge</b>${tag ? `<span class="tag">${tag}</span>` : ''}<span class="grow"></span>${right}</div>`;
+
 function renderMain(s: Status) {
   const p = proxyInfo(s.proxy, s.port);
   const a = authInfo(s.auth, s.authHint);
   const t = takeoverInfo(s);
   const tones = [p.tone, a.tone, t.tone];
   const overall: Tone = tones.includes('err') ? 'err' : tones.includes('warn') ? 'warn' : 'ok';
-  const overallText = { ok: '一切正常', warn: '需要留意', err: '有问题' }[overall];
+  const overallText = { ok: '运行中', warn: '需要留意', err: '有问题' }[overall];
 
   const alerts: string[] = [];
   if (s.proxy.kind === 'portBusy') {
-    alerts.push(alert('err', '端口被占用', s.proxy.isClaudeCodex ? '可能是以前手动启动的代理，由本客户端接管更稳定。' : '请在设置里换一个端口。',
+    alerts.push(alert('err', `端口 ${s.port} 被占用`, s.proxy.isClaudeCodex ? '可能是以前手动启动的代理，由本客户端接管更稳定。' : '请在设置里换一个端口。',
       s.proxy.isClaudeCodex ? `<button class="btn danger" data-act="kill-port">结束它并接管</button>` : ''));
   }
   if (s.proxy.kind === 'failed') alerts.push(alert('err', '代理反复崩溃', `<code>${esc(s.proxy.message)}</code>`, `<button class="btn" data-act="restart">重试</button>`));
   if (s.authHint || s.auth.kind === 'missing') {
-    alerts.push(alert('err', 'Codex 登录不可用', s.authHint ? `<code>${esc(s.authHint)}</code>` : esc((s.auth as any).reason), `<button class="btn" data-act="login">运行 codex login</button>`));
-  }
-  if (s.devMode) {
-    const cmd = `claude --settings "${s.settingsPath}"`;
-    alerts.push(alert('info', '开发模式 · 只写沙盒配置，不影响全局 Claude Code',
-      `用这条命令单独开一个窗口测试：<br><code>${esc(cmd)}</code>`,
-      `<button class="btn" data-act="copy-dev-cmd" data-cmd="${esc(cmd)}">${icon.copy()} 复制</button>`));
+    alerts.push(alert('err', 'Codex 登录不可用', s.authHint ? `<code>${esc(s.authHint)}</code>` : esc((s.auth as any).reason), `<button class="btn" data-act="login">codex login</button>`));
   }
   if (s.networkHint) alerts.push(alert('warn', '出口网络不可用', `代理连不上 OpenAI，检查出口代理是否开启。<br><code>${esc(s.networkHint)}</code>`, ''));
+  if (s.devMode) {
+    const cmd = `claude --settings "${s.settingsPath}"`;
+    alerts.push(alert('info', '开发模式 · 不影响全局 Claude Code', `用这条命令单独开窗口测试：<br><code>${esc(cmd)}</code>`,
+      `<button class="btn" data-act="copy-dev-cmd" data-cmd="${esc(cmd)}">复制</button>`));
+  }
 
-  const top = `
-    <div class="top">
-      <div class="brand">${icon.logo()}</div>
-      <div class="grow"><h1>Codex Bridge</h1><div class="sub">${s.devMode ? '开发模式 · 端口 ' + s.port : '把 Codex 模型接入 Claude Code'}</div></div>
-      <span class="pill ${overall}"><span class="dot ${overall === 'ok' ? '' : 'pulse'}"></span>${overallText}</span>
-    </div>`;
-
-  const firstIssue = [a, p, t].find((x) => x.tone !== 'ok');
-  const heroMeta = firstIssue ? firstIssue.meta : `Claude Code → 127.0.0.1:${s.port} → ChatGPT 订阅`;
-  const live = s.proxy.kind === 'running';
-  const cards = `
-    <section class="hero">
-      <div class="flow">
-        ${node(a.tone, icon.key(20), 'Codex 登录', a.value)}
-        ${link(a.tone === 'ok' && p.tone === 'ok', live)}
-        ${node(p.tone, icon.server(20), '代理', p.value)}
-        ${link(p.tone === 'ok' && s.takenOver, live && s.takenOver)}
-        ${node(t.tone, icon.terminal(20), 'Claude Code', t.value)}
+  const cell = (k: string, i: { tone: Tone; value: string; meta: string }, sub: string) =>
+    `<div class="cell"><div class="k">${k}</div><div class="v"><span class="dot ${i.tone}"></span>${esc(i.value)}</div><div class="s" title="${esc(i.meta)}">${esc(sub)}</div></div>`;
+  const authSub = s.auth.kind === 'ok' ? `到期 ${fmtTime(s.auth.expiresAt)}` : a.tone === 'ok' ? '' : '需要登录';
+  const status = `
+    <section>
+      <div class="h">Status<span class="grow"></span><button class="act" data-act="restart">${icon.refresh(13)} 重启代理</button></div>
+      <div class="grid">
+        ${cell('Codex', a, authSub)}
+        ${cell('代理', { ...p, value: s.proxy.kind === 'running' ? `:${s.port}` : p.value }, s.proxy.kind === 'running' ? '127.0.0.1' : p.meta)}
+        ${cell('Claude Code', t, t.tone === 'ok' ? '新开窗口生效' : '')}
       </div>
-      <div class="hero-foot">
-        <span class="hero-meta" title="${esc(heroMeta)}">${esc(heroMeta)}</span>
-        <button class="btn icon ghost" data-act="restart" title="重启代理" aria-label="重启代理">${icon.refresh()}</button>
-      </div>
-    </section>
-    <div class="card">
-      <div class="body"><div class="value">接管 Claude Code</div><div class="meta">${esc(t.meta)}</div></div>
-      <label class="switch" title="接管 Claude Code"><input type="checkbox" data-act="takeover" ${s.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label>
-    </div>`;
-
-  const models = `
-    <section class="section">
-      <header>可用 Codex 模型 <span class="count">${s.models.length}</span><span class="grow"></span>
-        <button class="btn icon ghost" data-act="refresh-models" title="刷新" aria-label="刷新模型">${icon.refresh()}</button></header>
-      <div class="content">${s.models.length ? `<div class="chips">${s.models.map((m) => `<span class="chip">${esc(m)}</span>`).join('')}</div>` : `<div class="empty">代理就绪后显示</div>`}</div>
     </section>`;
 
-  const logs = `
-    <details class="section" id="logs-sec" ${logsOpen ? 'open' : ''}>
-      <summary>${icon.log()} 日志<span class="count" style="color:var(--text-3);font-weight:500">${s.logsTail.length}</span>
-        <span class="chev">${icon.chevron()}</span></summary>
-      <div class="content">
-        <div class="logs" id="logs">${s.logsTail.map(logLine).join('\n') || '暂无日志'}</div>
-        <div class="row between" style="margin-top:8px"><span class="empty">上游 claude-codex ${esc(s.upstreamVersion)}</span>
-        <button class="btn" data-act="copy-logs">${icon.copy()} 复制全部</button></div>
-      </div>
-    </details>`;
+  const take = `
+    <section class="box tog">
+      <div><b>接管 Claude Code</b><div class="sub">${esc(t.tone === 'err' ? t.meta : '新开窗口可在 /model 里选 Codex 模型')}</div></div>
+      <label class="switch" title="接管 Claude Code"><input type="checkbox" data-act="takeover" ${s.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label>
+    </section>`;
 
-  app.innerHTML = `${top}${alerts.join('')}${cards}${models}<div id="settings-slot"></div>${logs}
-    <footer class="foot">改动只对新开的 Claude Code 窗口生效 · 关闭窗口会缩到托盘</footer>`;
-  mountSettings(s.config);
+  const shown = modelsExpanded ? s.models : s.models.slice(0, MODEL_PREVIEW);
+  const rest = s.models.length - shown.length;
+  const models = `
+    <section>
+      <div class="h">Models · ${s.models.length}<span class="grow"></span><button class="act" data-act="refresh-models">${icon.refresh(13)} 刷新</button></div>
+      <div class="box models">
+        ${s.models.length ? shown.map((m, i) => `<div class="m"><span>${esc(m)}</span>${i === 0 ? '<span class="new">最新</span>' : ''}</div>`).join('') : '<div class="empty">代理就绪后显示</div>'}
+        ${rest > 0 ? `<button class="more" data-act="models-more">还有 ${rest} 个 ${icon.chevron(14)}</button>` : ''}
+        ${modelsExpanded && s.models.length > MODEL_PREVIEW ? `<button class="more" data-act="models-more">收起</button>` : ''}
+      </div>
+    </section>`;
+
+  const btns = `
+    <div class="btns">
+      <button class="btn ${panel === 'logs' ? 'on' : ''}" data-act="panel-logs">${icon.log(14)} 日志</button>
+      <button class="btn ${panel === 'settings' ? 'on' : ''}" data-act="panel-settings">${icon.settings(14)} 设置</button>
+    </div>`;
+
+  const logs = panel === 'logs' ? `
+    <section class="panel">
+      <div class="logs" id="logs">${s.logsTail.map(logLine).join('\n') || '暂无日志'}</div>
+      <div class="row between" style="margin-top:8px"><span style="color:var(--text-3);font-size:12px">上游 claude-codex ${esc(s.upstreamVersion)}</span>
+        <button class="btn" data-act="copy-logs">${icon.copy(14)} 复制全部</button></div>
+    </section>` : '';
+
+  app.innerHTML = `${topBar(`<span class="badge"><span class="dot ${overall}"></span>${overallText}</span>`, s.devMode ? 'DEV' : '')}
+    <div class="main">${alerts.join('')}${status}${take}${models}${btns}${logs}<div id="settings-slot"></div></div>
+    <div class="foot">改动只对新开的 Claude Code 窗口生效 · 关闭窗口会缩到托盘</div>`;
+  if (panel === 'settings') mountSettings(s.config);
+  else document.getElementById('settings-slot')?.remove();
   const box = document.getElementById('logs');
   if (box) box.scrollTop = box.scrollHeight;
-  document.getElementById('logs-sec')?.addEventListener('toggle', (e) => (logsOpen = (e.target as HTMLDetailsElement).open));
 }
-let logsOpen = false;
-
-const card = (tone: Tone, ic: string, title: string, value: string, meta: string, action: string) => `
-  <div class="card"><div class="ic ${tone}">${ic}</div>
-    <div class="body"><div class="title">${title}</div><div class="value">${esc(value)}</div><div class="meta" title="${esc(meta)}">${esc(meta)}</div></div>
-    ${action}</div>`;
-
-const node = (tone: Tone, ic: string, label: string, value: string) => `
-  <div class="node ${tone}"><div class="node-ic">${ic}<span class="node-dot"></span></div>
-    <div class="node-label">${label}</div><div class="node-value">${esc(value)}</div></div>`;
-
-const link = (ok: boolean, flowing: boolean) => `<div class="link ${ok ? 'ok' : ''} ${flowing ? 'flowing' : ''}"><span></span></div>`;
 
 const alert = (tone: Tone | 'info', title: string, body: string, action: string) => `
-  <div class="alert ${tone}">${icon.alert()}<div class="msg"><b>${title}</b>${body}</div>${action}</div>`;
+  <div class="alert ${tone}">${icon.alert(16)}<div class="msg"><b>${title}</b>${body}</div>${action}</div>`;
 
 function logLine(l: string) {
   const cls = /"level":"(error)"|失败|error/i.test(l) ? 'e' : /"level":"warn"|占用|超时|重启/.test(l) ? 'w' : '';
   return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
 }
 
-// 设置区：自己维护表单状态，不被状态推送覆盖
+// 设置面板：自己维护表单状态，不被状态推送覆盖
 let settingsDraft: AppConfig | null = null;
-let settingsOpen = false;
 function mountSettings(cfg: AppConfig) {
   const slot = document.getElementById('settings-slot')!;
   const d = settingsDraft ?? { ...cfg };
   const dirty = settingsDraft && JSON.stringify(settingsDraft) !== JSON.stringify(cfg);
   slot.outerHTML = `
-    <details class="section" id="settings" ${settingsOpen ? 'open' : ''}>
-      <summary>${icon.settings()} 设置<span class="chev">${icon.chevron()}</span></summary>
-      <div class="content">
-        <div class="row">
-          <div class="field" style="width:110px"><label for="f-port">端口</label><input id="f-port" class="input mono" inputmode="numeric" value="${d.port}"></div>
-          <div class="field" style="flex:1"><label for="f-proxy">出口代理</label><input id="f-proxy" class="input mono" placeholder="留空 = 直连" value="${esc(d.outbound_proxy ?? '')}"></div>
-        </div>
-        <div class="field"><label for="f-codex">Codex 目录</label><input id="f-codex" class="input mono" placeholder="默认 ~/.codex" value="${esc(d.codex_home ?? '')}"></div>
-        <div class="field"><label for="f-claude">Claude 目录</label><input id="f-claude" class="input mono" placeholder="默认 ~/.claude" value="${esc(d.claude_dir ?? '')}"></div>
-        <div class="toggle-row"><span>开机自启</span><label class="switch"><input type="checkbox" id="f-auto" ${d.autostart ? 'checked' : ''} aria-label="开机自启"><span></span></label></div>
-        <div class="row" style="justify-content:flex-end;gap:8px;${dirty ? '' : 'display:none'}" id="settings-actions">
-          <button class="btn ghost" data-act="settings-reset">取消</button>
-          <button class="btn primary" data-act="settings-save">${icon.check()} 保存并应用</button>
-        </div>
+    <section class="panel" id="settings">
+      <div class="row">
+        <div class="field" style="width:96px"><label for="f-port">端口</label><input id="f-port" class="input mono" inputmode="numeric" value="${d.port}"></div>
+        <div class="field" style="flex:1"><label for="f-proxy">出口代理</label><input id="f-proxy" class="input mono" placeholder="留空 = 直连" value="${esc(d.outbound_proxy ?? '')}"></div>
       </div>
-    </details>`;
-  const el = document.getElementById('settings') as HTMLDetailsElement;
-  el.addEventListener('toggle', () => (settingsOpen = el.open));
+      <div class="field"><label for="f-codex">Codex 目录</label><input id="f-codex" class="input mono" placeholder="默认 ~/.codex" value="${esc(d.codex_home ?? '')}"></div>
+      <div class="field"><label for="f-claude">Claude 目录</label><input id="f-claude" class="input mono" placeholder="默认 ~/.claude" value="${esc(d.claude_dir ?? '')}"></div>
+      <div class="toggle-row"><span>开机自启</span><label class="switch"><input type="checkbox" id="f-auto" ${d.autostart ? 'checked' : ''} aria-label="开机自启"><span></span></label></div>
+      <div class="row" style="justify-content:flex-end;margin-top:8px;${dirty ? '' : 'display:none'}" id="settings-actions">
+        <button class="btn ghost" data-act="settings-reset">取消</button>
+        <button class="btn pri" data-act="settings-save">保存并应用</button>
+      </div>
+    </section>`;
+  const el = document.getElementById('settings')!;
   el.addEventListener('input', () => {
     settingsDraft = readForm(cfg);
     const changed = JSON.stringify(settingsDraft) !== JSON.stringify(cfg);
@@ -202,8 +195,7 @@ async function loadEnv() {
 }
 
 function checkRow(tone: Tone, title: string, desc: string, act = '') {
-  const ic = tone === 'ok' ? icon.check(14) : tone === 'warn' ? '!' : '×';
-  return `<div class="check"><div class="ic ${tone}">${ic}</div><div style="flex:1;min-width:0"><div class="t">${title}</div><div class="d">${desc}</div>${act ? `<div class="act">${act}</div>` : ''}</div></div>`;
+  return `<div class="check"><span class="dot ${tone}"></span><div style="flex:1;min-width:0"><div class="t">${title}</div><div class="d">${desc}</div>${act ? `<div class="act">${act}</div>` : ''}</div></div>`;
 }
 
 function renderWizard() {
@@ -211,7 +203,7 @@ function renderWizard() {
   const c = wiz.cfg;
   const bar = `<div class="steps">${Array.from({ length: STEPS }, (_, i) => `<i class="${i <= wiz.step ? 'on' : ''}"></i>`).join('')}</div>`;
   let body = '';
-  let next = `<button class="btn primary" data-act="wiz-next">下一步 ${icon.arrowRight()}</button>`;
+  let next = `<button class="btn pri" data-act="wiz-next">下一步 ${icon.arrowRight()}</button>`;
 
   if (!e || !c) {
     body = `<h2>欢迎使用 Codex Bridge</h2><p class="lead">正在检测本机环境…</p><div class="result"><span class="spinner"></span></div>`;
@@ -225,12 +217,12 @@ function renderWizard() {
         ${checkRow(authOk ? 'ok' : 'err', 'ChatGPT 登录', authOk ? `<code>${esc(e.authPath)}</code>` : esc((auth as any).reason), authOk ? '' : `<button class="btn" data-act="login">${icon.terminal()} 打开终端运行 codex login</button><button class="btn ghost" data-act="wiz-recheck">${icon.refresh()} 重新检测</button>`)}
         ${checkRow(e.settingsOk ? 'ok' : 'err', 'Claude Code 配置', e.settingsOk ? `<code>${esc(e.claudeSettings)}</code>` : esc(e.settingsError ?? ''))}
       </div>`;
-    if (!authOk || !e.settingsOk) next = `<button class="btn primary" disabled>下一步 ${icon.arrowRight()}</button>`;
+    if (!authOk || !e.settingsOk) next = `<button class="btn pri" disabled>下一步 ${icon.arrowRight()}</button>`;
   } else if (wiz.step === 1) {
     const t = wiz.test;
     const res = t === 'loading' ? `<div class="result"><span class="spinner"></span> 正在连接 chatgpt.com…</div>`
       : t ? `<div class="result ${t.ok ? 'ok' : 'err'}">${t.ok ? icon.check(14) : icon.alert(14)} ${esc(t.text)}</div>` : `<div class="result"></div>`;
-    body = `<div><h2>出口网络</h2><p class="lead">代理需要访问 OpenAI。国内网络一般要填本机代理地址，例如 <code style="font-family:var(--mono)">http://127.0.0.1:7890</code>。</p></div>
+    body = `<div><h2>出口网络</h2><p class="lead">代理需要访问 OpenAI。国内网络一般要填本机代理地址，例如 <code>http://127.0.0.1:7890</code>。</p></div>
       <div class="field"><label for="w-proxy">出口代理</label>
         <div class="row"><input id="w-proxy" class="input mono" placeholder="留空 = 直连" value="${esc(c.outbound_proxy ?? '')}">
         <button class="btn" data-act="wiz-test">测试连通</button></div>
@@ -238,26 +230,21 @@ function renderWizard() {
   } else if (wiz.step === 2) {
     body = `<div><h2>运行方式</h2><p class="lead">代理只监听本机，端口被占用时可以换一个。</p></div>
       <div class="field" style="max-width:160px"><label for="w-port">端口</label><input id="w-port" class="input mono" inputmode="numeric" value="${c.port}"></div>
-      <div class="section"><div class="content" style="padding-top:8px">
-        <div class="toggle-row"><span>开机自启（启动后只在托盘）</span><label class="switch"><input type="checkbox" id="w-auto" ${c.autostart ? 'checked' : ''} aria-label="开机自启"><span></span></label></div>
-      </div></div>`;
+      <div class="box tog"><div><b>开机自启</b><div class="sub">开机后只在托盘运行</div></div><label class="switch"><input type="checkbox" id="w-auto" ${c.autostart ? 'checked' : ''} aria-label="开机自启"><span></span></label></div>`;
   } else {
     const p = status ? proxyInfo(status.proxy, c.port) : { tone: 'warn' as Tone, value: '启动中…', meta: '' };
     const models = status?.models ?? [];
     body = `<div><h2>启动代理</h2><p class="lead">代理就绪后会列出可用的 Codex 模型。</p></div>
-      ${card(p.tone, icon.server(), '代理', p.value, p.meta, '')}
-      <div class="section"><header>可用 Codex 模型 <span class="count">${models.length}</span></header>
-        <div class="content">${models.length ? `<div class="chips">${models.map((m) => `<span class="chip">${esc(m)}</span>`).join('')}</div>` : `<div class="empty">等待代理就绪…</div>`}</div></div>
-      <div class="section"><div class="content" style="padding-top:8px">
-        <div class="toggle-row"><span>接管 Claude Code（写入 settings.json）</span><label class="switch"><input type="checkbox" id="w-take" ${c.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label></div>
-        <div class="empty">退出客户端时会自动恢复原配置。</div></div></div>`;
+      <div class="grid" style="grid-template-columns:1fr 1fr"><div class="cell"><div class="k">代理</div><div class="v"><span class="dot ${p.tone}"></span>${esc(p.value)}</div><div class="s">${esc(p.meta)}</div></div>
+        <div class="cell"><div class="k">可用模型</div><div class="v">${models.length || '—'}</div><div class="s">${esc(models[0] ?? '等待代理就绪')}</div></div></div>
+      <div class="box tog"><div><b>接管 Claude Code</b><div class="sub">写入 settings.json，退出客户端时自动恢复</div></div><label class="switch"><input type="checkbox" id="w-take" ${c.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label></div>`;
     const ready = status?.proxy.kind === 'running' && models.length > 0;
-    next = `<button class="btn primary" data-act="wiz-finish" ${ready ? '' : 'disabled'}>${icon.check()} 完成</button>`;
+    next = `<button class="btn pri" data-act="wiz-finish" ${ready ? '' : 'disabled'}>${icon.check()} 完成</button>`;
   }
 
   const back = wiz.step > 0 ? `<button class="btn ghost" data-act="wiz-back">${icon.arrowLeft()} 上一步</button>` : '';
   app.innerHTML = `
-    <div class="top"><div class="brand">${icon.logo()}</div><div class="grow"><h1>Codex Bridge</h1><div class="sub">首次设置 · 第 ${wiz.step + 1} / ${STEPS} 步</div></div></div>
+    ${topBar(`<span class="badge">首次设置 ${wiz.step + 1}/${STEPS}</span>`)}
     <div class="wizard">${bar}${body}<div class="nav">${back}<span class="grow"></span>${next}</div></div>`;
 }
 
@@ -314,12 +301,16 @@ async function act(name: string, target: HTMLElement) {
       case 'takeover': await invoke('set_takeover', { on: (target as HTMLInputElement).checked }); break;
       case 'refresh-models': { const m = await invoke<string[]>('refresh_models'); toast(`已刷新，共 ${m.length} 个模型`); break; }
       case 'copy-dev-cmd': await navigator.clipboard.writeText(target.dataset.cmd ?? ''); toast('已复制命令'); break;
+      case 'models-more': modelsExpanded = !modelsExpanded; render(); break;
+      case 'panel-logs': panel = panel === 'logs' ? 'none' : 'logs'; render(); break;
+      case 'panel-settings': panel = panel === 'settings' ? 'none' : 'settings'; render(); break;
       case 'copy-logs': { const n = await invoke<number>('copy_logs'); toast(`已复制 ${n} 行日志`); break; }
       case 'settings-reset': settingsDraft = null; render(); break;
       case 'settings-save': {
         const cfg = readForm(status!.config);
         await invoke('save_config', { cfg });
         settingsDraft = null;
+        panel = 'none';
         toast('已保存');
         break;
       }
