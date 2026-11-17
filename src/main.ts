@@ -61,8 +61,8 @@ function renderMain(s: Status) {
   }
   if (s.devMode) {
     const cmd = `claude --settings "${s.settingsPath}"`;
-    alerts.push(alert('warn', '开发模式：只写沙盒配置，不影响全局 Claude Code',
-      `测试 Codex 模型请用下面的命令单独开一个窗口：<br><code>${esc(cmd)}</code>`,
+    alerts.push(alert('info', '开发模式 · 只写沙盒配置，不影响全局 Claude Code',
+      `用这条命令单独开一个窗口测试：<br><code>${esc(cmd)}</code>`,
       `<button class="btn" data-act="copy-dev-cmd" data-cmd="${esc(cmd)}">${icon.copy()} 复制</button>`));
   }
   if (s.networkHint) alerts.push(alert('warn', '出口网络不可用', `代理连不上 OpenAI，检查出口代理是否开启。<br><code>${esc(s.networkHint)}</code>`, ''));
@@ -74,12 +74,26 @@ function renderMain(s: Status) {
       <span class="pill ${overall}"><span class="dot ${overall === 'ok' ? '' : 'pulse'}"></span>${overallText}</span>
     </div>`;
 
+  const firstIssue = [a, p, t].find((x) => x.tone !== 'ok');
+  const heroMeta = firstIssue ? firstIssue.meta : `Claude Code → 127.0.0.1:${s.port} → ChatGPT 订阅`;
+  const live = s.proxy.kind === 'running';
   const cards = `
-    <div class="cards">
-      ${card(p.tone, icon.server(), '代理', p.value, p.meta, `<button class="btn icon ghost" data-act="restart" title="重启代理" aria-label="重启代理">${icon.refresh()}</button>`)}
-      ${card(a.tone, icon.key(), 'Codex 登录', a.value, a.meta, a.tone === 'err' ? `<button class="btn" data-act="login">登录</button>` : '')}
-      ${card(t.tone, icon.terminal(), 'Claude Code', t.value, t.meta,
-        `<label class="switch" title="接管 Claude Code"><input type="checkbox" data-act="takeover" ${s.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label>`)}
+    <section class="hero">
+      <div class="flow">
+        ${node(a.tone, icon.key(20), 'Codex 登录', a.value)}
+        ${link(a.tone === 'ok' && p.tone === 'ok', live)}
+        ${node(p.tone, icon.server(20), '代理', p.value)}
+        ${link(p.tone === 'ok' && s.takenOver, live && s.takenOver)}
+        ${node(t.tone, icon.terminal(20), 'Claude Code', t.value)}
+      </div>
+      <div class="hero-foot">
+        <span class="hero-meta" title="${esc(heroMeta)}">${esc(heroMeta)}</span>
+        <button class="btn icon ghost" data-act="restart" title="重启代理" aria-label="重启代理">${icon.refresh()}</button>
+      </div>
+    </section>
+    <div class="card">
+      <div class="body"><div class="value">接管 Claude Code</div><div class="meta">${esc(t.meta)}</div></div>
+      <label class="switch" title="接管 Claude Code"><input type="checkbox" data-act="takeover" ${s.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label>
     </div>`;
 
   const models = `
@@ -114,7 +128,13 @@ const card = (tone: Tone, ic: string, title: string, value: string, meta: string
     <div class="body"><div class="title">${title}</div><div class="value">${esc(value)}</div><div class="meta" title="${esc(meta)}">${esc(meta)}</div></div>
     ${action}</div>`;
 
-const alert = (tone: Tone, title: string, body: string, action: string) => `
+const node = (tone: Tone, ic: string, label: string, value: string) => `
+  <div class="node ${tone}"><div class="node-ic">${ic}<span class="node-dot"></span></div>
+    <div class="node-label">${label}</div><div class="node-value">${esc(value)}</div></div>`;
+
+const link = (ok: boolean, flowing: boolean) => `<div class="link ${ok ? 'ok' : ''} ${flowing ? 'flowing' : ''}"><span></span></div>`;
+
+const alert = (tone: Tone | 'info', title: string, body: string, action: string) => `
   <div class="alert ${tone}">${icon.alert()}<div class="msg"><b>${title}</b>${body}</div>${action}</div>`;
 
 function logLine(l: string) {
