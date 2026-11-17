@@ -89,7 +89,7 @@ async fn detect_environment(ctl: Ctl<'_>) -> Result<EnvReport, String> {
     let c = ctl.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let auth_path = c.auth_path();
-        let settings = c.config().claude_settings_path(c.home());
+        let settings = c.settings_path();
         let parsed = claude_settings::read_settings(&settings);
         let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
         EnvReport {
@@ -130,6 +130,10 @@ fn hide_window(app: AppHandle) {
 }
 
 pub fn apply_autostart(app: &AppHandle, on: bool) {
+    // 开发构建不注册开机自启，免得把 target/debug 里的程序挂进系统
+    if config::DEV_MODE {
+        return;
+    }
     let al = app.autolaunch();
     let _ = if on { al.enable() } else { al.disable() };
 }
@@ -148,15 +152,19 @@ fn sidecar_path() -> PathBuf {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let hidden = std::env::args().any(|a| a == "--hidden");
-    tauri::Builder::default()
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+    let mut builder = tauri::Builder::default();
+    // 开发构建不注册单实例，避免与已安装的正式版互相抢占
+    if !config::DEV_MODE {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)));
+    }
+    builder
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec!["--hidden"])))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .setup(move |app| {
             let handle = app.handle().clone();
             let home = dirs::home_dir().expect("home dir");
-            let data_dir = app.path().app_data_dir()?;
+            let data_dir = app.path().app_data_dir()?.join(if config::DEV_MODE { "dev" } else { "" });
             let ctl = Controller::new(handle.clone(), sidecar_path(), home, data_dir);
             let tray = tray::build(&handle, ctl.clone())?;
             ctl.set_status_listener(move |st| tray.update(st));

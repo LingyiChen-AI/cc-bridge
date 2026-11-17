@@ -53,15 +53,38 @@ pub fn classify_log_line(line: &str) -> Option<LogHint> {
     let text = |k: &str| f.get(k).and_then(Value::as_str).unwrap_or_default().to_string();
     match msg {
         "request_failed" if status == Some(401) => Some(LogHint::Auth401(text("message"))),
-        "codex_upstream_request_failed" if f.get("origin").and_then(Value::as_str) != Some("Auth") && status != Some(401) => {
-            let err = text("error");
-            let lower = err.to_lowercase();
-            let net = ["network", "timed out", "timeout", "connect", "proxy", "dns", "tls"].iter().any(|k| lower.contains(k));
-            net.then_some(LogHint::UpstreamNetwork(err))
+        // 上游连不上时，失败信息出现在 request_failed.message（502）或 codex_upstream_request_failed.error
+        "request_failed" | "codex_upstream_request_failed" if f.get("origin").and_then(Value::as_str) != Some("Auth") => {
+            let err = if msg == "request_failed" { text("message") } else { text("error") };
+            is_network_error(&err).then_some(LogHint::UpstreamNetwork(err))
         }
         "request_completed" if status == Some(200) && f.get("provider").and_then(Value::as_str) == Some("codex") => Some(LogHint::None),
         _ => None,
     }
+}
+
+fn is_network_error(err: &str) -> bool {
+    let lower = err.to_lowercase();
+    ["network", "timed out", "timeout", "connect", "proxy", "dns", "tls", "error sending request"].iter().any(|k| lower.contains(k))
+}
+
+/// 只保留 Codex 提供的模型（display_name 以 "(codex)" 结尾），新版本在前。
+pub fn codex_models(data: &[Value]) -> Vec<String> {
+    let mut ids: Vec<String> = data
+        .iter()
+        .filter(|m| m.get("display_name").and_then(Value::as_str).is_some_and(|d| d.trim_end().ends_with("(codex)")))
+        .filter_map(|m| m.get("id").and_then(Value::as_str).map(String::from))
+        .collect();
+    ids.sort_by(|a, b| version_key(b).cmp(&version_key(a)).then_with(|| a.cmp(b)));
+    ids
+}
+
+/// "gpt-6.1-sol-fast" → [6, 1]；没有版本号的排最后。
+fn version_key(id: &str) -> Vec<u32> {
+    id.split('-')
+        .find(|seg| seg.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        .map(|v| v.split('.').map(|n| n.parse().unwrap_or(0)).collect())
+        .unwrap_or_default()
 }
 
 type Listener = Box<dyn Fn() + Send + Sync>;
@@ -349,11 +372,7 @@ impl Supervisor {
             return false;
         }
         let Ok(v) = resp.json::<Value>() else { return false };
-        let ids: Vec<String> = v
-            .get("data")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(|m| m.get("id").and_then(Value::as_str)).filter(|id| !id.starts_with("claude")).map(String::from).collect())
-            .unwrap_or_default();
+        let ids = v.get("data").and_then(Value::as_array).map(|a| codex_models(a)).unwrap_or_default();
         let changed = {
             let mut cur = self.0.models.lock().unwrap();
             let changed = *cur != ids;
@@ -411,5 +430,19 @@ mod tests {
         let done = r#"{"msg":"request_completed","fields":{"status":200,"provider":"codex"}}"#;
         assert_eq!(classify_log_line(done), Some(LogHint::None));
         assert_eq!(classify_log_line("Configure Claude Code:"), None);
+        let failed = r#"{"msg":"request_failed","fields":{"status":502,"message":"Network error: error sending request for url (https://chatgpt.com/backend-api/codex/responses)"}}"#;
+        assert!(matches!(classify_log_line(failed), Some(LogHint::UpstreamNetwork(_))));
+        let rate = r#"{"msg":"request_failed","fields":{"status":429,"message":"Error","model":"claude-opus-5-5"}}"#;
+        assert_eq!(classify_log_line(rate), None);
+    }
+
+    #[test]
+    fn codex_models_filtered_and_newest_first() {
+        let data: Vec<Value> = [("claude-opus-5-5", "anthropic"), ("gpt-5.2", "codex"), ("gpt-6.1-sol-fast", "codex"), ("gpt-6-sol", "codex"),
+            ("gpt-6.1-sol", "codex"), ("grok-4.7", "grok"), ("cursor", "cursor"), ("gpt-5.3-codex", "codex")]
+            .iter()
+            .map(|(id, p)| serde_json::json!({"id": id, "display_name": format!("{id} ({p})")}))
+            .collect();
+        assert_eq!(codex_models(&data), ["gpt-6.1-sol", "gpt-6.1-sol-fast", "gpt-6-sol", "gpt-5.3-codex", "gpt-5.2"]);
     }
 }

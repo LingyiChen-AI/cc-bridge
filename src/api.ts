@@ -39,6 +39,7 @@ export interface Status {
   upstreamVersion: string;
   logsTail: string[];
   onboarded: boolean;
+  devMode: boolean;
 }
 
 export interface EnvReport {

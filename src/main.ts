@@ -59,12 +59,18 @@ function renderMain(s: Status) {
   if (s.authHint || s.auth.kind === 'missing') {
     alerts.push(alert('err', 'Codex 登录不可用', s.authHint ? `<code>${esc(s.authHint)}</code>` : esc((s.auth as any).reason), `<button class="btn" data-act="login">运行 codex login</button>`));
   }
+  if (s.devMode) {
+    const cmd = `claude --settings "${s.settingsPath}"`;
+    alerts.push(alert('warn', '开发模式：只写沙盒配置，不影响全局 Claude Code',
+      `测试 Codex 模型请用下面的命令单独开一个窗口：<br><code>${esc(cmd)}</code>`,
+      `<button class="btn" data-act="copy-dev-cmd" data-cmd="${esc(cmd)}">${icon.copy()} 复制</button>`));
+  }
   if (s.networkHint) alerts.push(alert('warn', '出口网络不可用', `代理连不上 OpenAI，检查出口代理是否开启。<br><code>${esc(s.networkHint)}</code>`, ''));
 
   const top = `
     <div class="top">
       <div class="brand">${icon.logo()}</div>
-      <div class="grow"><h1>Codex Bridge</h1><div class="sub">把 Codex 模型接入 Claude Code</div></div>
+      <div class="grow"><h1>Codex Bridge</h1><div class="sub">${s.devMode ? '开发模式 · 端口 ' + s.port : '把 Codex 模型接入 Claude Code'}</div></div>
       <span class="pill ${overall}"><span class="dot ${overall === 'ok' ? '' : 'pulse'}"></span>${overallText}</span>
     </div>`;
 
@@ -202,7 +208,7 @@ function renderWizard() {
     if (!authOk || !e.settingsOk) next = `<button class="btn primary" disabled>下一步 ${icon.arrowRight()}</button>`;
   } else if (wiz.step === 1) {
     const t = wiz.test;
-    const res = t === 'loading' ? `<div class="result"><span class="spinner"></span> 正在连接 auth.openai.com…</div>`
+    const res = t === 'loading' ? `<div class="result"><span class="spinner"></span> 正在连接 chatgpt.com…</div>`
       : t ? `<div class="result ${t.ok ? 'ok' : 'err'}">${t.ok ? icon.check(14) : icon.alert(14)} ${esc(t.text)}</div>` : `<div class="result"></div>`;
     body = `<div><h2>出口网络</h2><p class="lead">代理需要访问 OpenAI。国内网络一般要填本机代理地址，例如 <code style="font-family:var(--mono)">http://127.0.0.1:7890</code>。</p></div>
       <div class="field"><label for="w-proxy">出口代理</label>
@@ -287,6 +293,7 @@ async function act(name: string, target: HTMLElement) {
       case 'login': await invoke('open_codex_login'); toast('已打开终端，登录完成后会自动检测'); break;
       case 'takeover': await invoke('set_takeover', { on: (target as HTMLInputElement).checked }); break;
       case 'refresh-models': { const m = await invoke<string[]>('refresh_models'); toast(`已刷新，共 ${m.length} 个模型`); break; }
+      case 'copy-dev-cmd': await navigator.clipboard.writeText(target.dataset.cmd ?? ''); toast('已复制命令'); break;
       case 'copy-logs': { const n = await invoke<number>('copy_logs'); toast(`已复制 ${n} 行日志`); break; }
       case 'settings-reset': settingsDraft = null; render(); break;
       case 'settings-save': {

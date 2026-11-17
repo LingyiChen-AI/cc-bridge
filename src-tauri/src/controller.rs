@@ -33,6 +33,7 @@ pub struct StatusDto {
     pub upstream_version: String,
     pub logs_tail: Vec<String>,
     pub onboarded: bool,
+    pub dev_mode: bool,
 }
 
 pub struct Controller {
@@ -107,8 +108,13 @@ impl Controller {
         &self.home
     }
 
-    fn settings_path(&self) -> PathBuf {
-        self.config().claude_settings_path(&self.home)
+    /// 开发模式下未指定 Claude 目录时，写沙盒文件，不碰全局 ~/.claude/settings.json。
+    pub fn settings_path(&self) -> PathBuf {
+        let cfg = self.config();
+        if crate::config::DEV_MODE && cfg.claude_dir.is_none() {
+            return self.data_dir.join("claude-sandbox").join("settings.json");
+        }
+        cfg.claude_settings_path(&self.home)
     }
 
     pub fn auth_path(&self) -> PathBuf {
@@ -263,6 +269,7 @@ impl Controller {
             upstream_version: UPSTREAM_VERSION.into(),
             logs_tail: self.sup.logs_tail(200),
             onboarded: self.onboarded(),
+            dev_mode: crate::config::DEV_MODE,
         }
     }
 

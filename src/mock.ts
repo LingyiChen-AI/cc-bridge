@@ -25,6 +25,7 @@ const base: Status = {
     '{"level":"info","msg":"request_completed","fields":{"model":"gpt-6.1-sol","status":200,"ms":1840}}',
   ],
   onboarded: true,
+  devMode: new URLSearchParams(location.search).has('dev'),
 };
 
 const scenes: Record<string, Partial<Status>> = {

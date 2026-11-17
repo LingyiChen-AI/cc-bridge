@@ -2,7 +2,9 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::{fs, io, path::{Path, PathBuf}};
 
-pub const DEFAULT_PORT: u16 = 18765;
+/// 开发构建（tauri dev）与正式版隔离：不同端口、不同数据目录、只写沙盒 settings。
+pub const DEV_MODE: bool = cfg!(debug_assertions);
+pub const DEFAULT_PORT: u16 = if DEV_MODE { 18766 } else { 18765 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(default)]

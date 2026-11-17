@@ -63,7 +63,8 @@ pub fn test_outbound(proxy: Option<&str>) -> Result<u64, String> {
     };
     let client = b.build().map_err(|e| e.to_string())?;
     let t = Instant::now();
-    client.get("https://auth.openai.com/").send().map_err(|e| {
+    // 测 Codex 实际调用的地址（GET 会返回 405，能拿到任何 HTTP 响应即算连通）
+    client.get("https://chatgpt.com/backend-api/codex/responses").send().map_err(|e| {
         if e.is_timeout() { "连接超时".to_string() } else if e.is_connect() { "无法连接（检查代理是否开启）".to_string() } else { e.to_string() }
     })?;
     Ok(t.elapsed().as_millis() as u64)
