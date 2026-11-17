@@ -4,13 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "fetch-sidecar": "node scripts/fetch-sidecar.mjs",
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "predev": "node scripts/fetch-sidecar.mjs",
-    "prebuild": "node scripts/fetch-sidecar.mjs"
+    "predev": "node scripts/build-sidecar.mjs",
+    "prebuild": "node scripts/build-sidecar.mjs",
+    "build-sidecar": "node scripts/build-sidecar.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"
