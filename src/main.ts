@@ -1,6 +1,7 @@
 import { invoke, onStatus, type AppConfig, type AuthState, type EnvReport, type ProxyState, type Status } from './api';
 import { icon } from './icons';
 import { LANGS, setLang, t, trError } from './i18n';
+import { toast } from './toast';
 import { anySelectOpen, installSelects, renderSelect, selectValue } from './select';
 
 type Tone = 'ok' | 'warn' | 'err';
@@ -311,27 +312,14 @@ function shouldRerender() {
   return !anySelectOpen() && !(ae instanceof HTMLInputElement && ae.type !== 'checkbox');
 }
 
-let toastTimer = 0;
-function toast(text: string) {
-  let el = document.querySelector('.toast') as HTMLElement | null;
-  if (!el) {
-    el = document.createElement('div');
-    el.className = 'toast';
-    document.body.appendChild(el);
-  }
-  el.textContent = text;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = window.setTimeout(() => el!.classList.remove('show'), 1800);
-}
 
 async function act(name: string, target: HTMLElement) {
   try {
     switch (name) {
-      case 'restart': await invoke('restart_proxy'); toast(t('toastRestart')); break;
-      case 'kill-port': await invoke('kill_port_owner'); toast(t('toastKill')); break;
+      case 'restart': await invoke('restart_proxy'); toast(t('toastRestart'), 'loading'); break;
+      case 'kill-port': await invoke('kill_port_owner'); toast(t('toastKill'), 'loading'); break;
       case 'login':
-        try { await invoke('open_codex_login'); toast(t('toastLogin')); } catch (e) { toast(trError('err_', String(e))); }
+        try { await invoke('open_codex_login'); toast(t('toastLogin'), 'info'); } catch (e) { toast(trError('err_', String(e)), 'error'); }
         break;
       case 'takeover': await invoke('set_takeover', { on: (target as HTMLInputElement).checked }); break;
       case 'refresh-models': { const m = await invoke<string[]>('refresh_models'); toast(t('toastRefreshed', { n: m.length })); break; }
@@ -377,7 +365,7 @@ async function act(name: string, target: HTMLElement) {
       case 'wiz-finish': syncWizardInputs(); await invoke('finish_onboarding', { cfg: wiz.cfg }); toast(t('toastDone')); break;
     }
   } catch (e) {
-    toast(String(e));
+    toast(String(e), 'error');
   }
 }
 
@@ -419,4 +407,5 @@ installSelects();
     await loadEnv();
   } else render();
   if (q.has('mock') && q.has('selopen')) (document.querySelector('.sel-btn') as HTMLElement | null)?.click();
+  if (q.has('mock') && q.has('toast')) { toast(t('toastSaved')); toast(t('toastRestart'), 'loading'); toast(trError('err_', 'noCli'), 'error'); }
 })();
