@@ -29,6 +29,7 @@ pub struct StatusDto {
     pub settings_path: String,
     pub settings_error: Option<String>,
     pub models: Vec<String>,
+    pub selected_models: Vec<String>,
     pub config: AppConfig,
     pub upstream_version: String,
     pub logs_tail: Vec<String>,
@@ -165,8 +166,9 @@ impl Controller {
         }
         let cfg = self.config();
         let state = self.sup.state();
-        let models = self.sup.models();
-        let want = self.onboarded() && cfg.takeover && state == ProxyState::Running && !models.is_empty();
+        let available = self.sup.models();
+        let models = cfg.effective_models(&available);
+        let want = self.onboarded() && cfg.takeover && state == ProxyState::Running && !available.is_empty();
         let failed = matches!(state, ProxyState::Failed { .. });
         if want {
             self.apply_now(&models);
@@ -264,6 +266,7 @@ impl Controller {
             taken_over,
             settings_path: path.to_string_lossy().into_owned(),
             settings_error: self.settings_error.lock().unwrap().clone(),
+            selected_models: cfg.effective_models(&self.sup.models()),
             models: self.sup.models(),
             config: cfg,
             upstream_version: UPSTREAM_VERSION.into(),
@@ -279,6 +282,13 @@ impl Controller {
         if let Some(f) = self.on_status.lock().unwrap().as_ref() {
             f(&st);
         }
+    }
+
+    pub fn set_models(&self, models: Option<Vec<String>>) {
+        let mut cfg = self.config();
+        cfg.selected_models = models;
+        self.store_config(cfg);
+        self.notify();
     }
 
     pub fn set_takeover(&self, on: bool) {

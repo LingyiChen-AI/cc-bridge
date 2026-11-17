@@ -8,7 +8,7 @@ for scene in ok portBusy authMissing onboard; do
   for theme in light dark; do
     flag=""
     [ "$theme" = dark ] && flag="--blink-settings=preferredColorScheme=0" || flag="--blink-settings=preferredColorScheme=1"
-    "$EDGE" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 --window-size=480,640 \
+    "$EDGE" --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=2 --window-size=600,760 \
       --user-data-dir="$(cygpath -w "$OUT/prof")" $flag --virtual-time-budget=3000 --screenshot="$(cygpath -w "$OUT")\\$scene-$theme.png" \
       "http://127.0.0.1:4173/?mock=$scene" >/dev/null 2>&1
   done

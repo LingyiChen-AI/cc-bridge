@@ -50,7 +50,7 @@ const LOGO = `<svg class="logo" viewBox="0 0 100 100" aria-hidden="true"><rect x
 
 let panel: 'none' | 'logs' | 'settings' = 'none';
 let modelsExpanded = false;
-const MODEL_PREVIEW = 4;
+const MODEL_PREVIEW = 8;
 
 const topBar = (right: string, tag = '') =>
   `<div class="top">${LOGO}<b>Codex Bridge</b>${tag ? `<span class="tag">${tag}</span>` : ''}<span class="grow"></span>${right}</div>`;
@@ -98,16 +98,26 @@ function renderMain(s: Status) {
       <label class="switch" title="接管 Claude Code"><input type="checkbox" data-act="takeover" ${s.takeover ? 'checked' : ''} aria-label="接管 Claude Code"><span></span></label>
     </section>`;
 
+  const sel = new Set(s.selectedModels);
+  const isDefault = s.config.selected_models === null;
   const shown = modelsExpanded ? s.models : s.models.slice(0, MODEL_PREVIEW);
   const rest = s.models.length - shown.length;
   const models = `
     <section>
-      <div class="h">Models · ${s.models.length}<span class="grow"></span><button class="act" data-act="refresh-models">${icon.refresh(13)} 刷新</button></div>
+      <div class="h">Models · 已选 ${sel.size} / ${s.models.length}<span class="grow"></span>
+        ${isDefault ? '' : `<button class="act" data-act="models-default">恢复默认</button>`}
+        <button class="act" data-act="models-all">全选</button>
+        <button class="act" data-act="models-none">清空</button>
+        <button class="act" data-act="refresh-models" title="刷新" aria-label="刷新模型">${icon.refresh(13)}</button></div>
       <div class="box models">
-        ${s.models.length ? shown.map((m, i) => `<div class="m"><span>${esc(m)}</span>${i === 0 ? '<span class="new">最新</span>' : ''}</div>`).join('') : '<div class="empty">代理就绪后显示</div>'}
-        ${rest > 0 ? `<button class="more" data-act="models-more">还有 ${rest} 个 ${icon.chevron(14)}</button>` : ''}
+        ${s.models.length ? shown.map((m, i) => `
+          <label class="m pick ${sel.has(m) ? 'on' : ''}">
+            <input type="checkbox" data-act="model-toggle" data-model="${esc(m)}" ${sel.has(m) ? 'checked' : ''}>
+            <span class="cb">${icon.check(12)}</span><span class="name">${esc(m)}</span>${i === 0 ? '<span class="new">最新</span>' : ''}</label>`).join('') : '<div class="empty">代理就绪后显示</div>'}
+        ${rest > 0 ? `<button class="more" data-act="models-more">展开其余 ${rest} 个 ${icon.chevron(14)}</button>` : ''}
         ${modelsExpanded && s.models.length > MODEL_PREVIEW ? `<button class="more" data-act="models-more">收起</button>` : ''}
       </div>
+      <div class="note"><span>只有勾选的模型会出现在 Claude Code 的 /model 里${isDefault ? '（默认最新 6 个）' : ''}</span></div>
     </section>`;
 
   const btns = `
@@ -188,7 +198,7 @@ const STEPS = 4;
 async function loadEnv() {
   wiz.env = await invoke<EnvReport>('detect_environment');
   if (!wiz.cfg) {
-    wiz.cfg = { ...(status?.config ?? { port: 18765, outbound_proxy: null, codex_home: null, claude_dir: null, autostart: true, takeover: true }) };
+    wiz.cfg = { ...(status?.config ?? { port: 18765, outbound_proxy: null, codex_home: null, claude_dir: null, autostart: true, takeover: true, selected_models: null }) };
     if (!wiz.cfg.outbound_proxy && wiz.env.systemProxy) wiz.cfg.outbound_proxy = wiz.env.systemProxy;
   }
   render();
@@ -301,6 +311,16 @@ async function act(name: string, target: HTMLElement) {
       case 'takeover': await invoke('set_takeover', { on: (target as HTMLInputElement).checked }); break;
       case 'refresh-models': { const m = await invoke<string[]>('refresh_models'); toast(`已刷新，共 ${m.length} 个模型`); break; }
       case 'copy-dev-cmd': await navigator.clipboard.writeText(target.dataset.cmd ?? ''); toast('已复制命令'); break;
+      case 'model-toggle': {
+        const cur = new Set(status!.selectedModels);
+        const m = target.dataset.model!;
+        (target as HTMLInputElement).checked ? cur.add(m) : cur.delete(m);
+        await invoke('set_models', { models: status!.models.filter((x) => cur.has(x)) });
+        break;
+      }
+      case 'models-all': await invoke('set_models', { models: status!.models }); break;
+      case 'models-none': await invoke('set_models', { models: [] }); break;
+      case 'models-default': await invoke('set_models', { models: null }); break;
       case 'models-more': modelsExpanded = !modelsExpanded; render(); break;
       case 'panel-logs': panel = panel === 'logs' ? 'none' : 'logs'; render(); break;
       case 'panel-settings': panel = panel === 'settings' ? 'none' : 'settings'; render(); break;

@@ -4,6 +4,7 @@ use std::{fs, io, path::{Path, PathBuf}};
 
 /// 开发构建（tauri dev）与正式版隔离：不同端口、不同数据目录、只写沙盒 settings。
 pub const DEV_MODE: bool = cfg!(debug_assertions);
+pub const DEFAULT_MODEL_COUNT: usize = 6;
 pub const DEFAULT_PORT: u16 = if DEV_MODE { 18766 } else { 18765 };
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -15,15 +16,25 @@ pub struct AppConfig {
     pub claude_dir: Option<PathBuf>,
     pub autostart: bool,
     pub takeover: bool,
+    /// 写进 Claude Code 选单的模型；None = 默认取最新的 DEFAULT_MODEL_COUNT 个
+    pub selected_models: Option<Vec<String>>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { port: DEFAULT_PORT, outbound_proxy: None, codex_home: None, claude_dir: None, autostart: true, takeover: true }
+        Self { port: DEFAULT_PORT, outbound_proxy: None, codex_home: None, claude_dir: None, autostart: true, takeover: true, selected_models: None }
     }
 }
 
 impl AppConfig {
+    /// 实际写入的模型：按可用列表（新→旧）顺序，过滤掉已不存在的选择。
+    pub fn effective_models(&self, available: &[String]) -> Vec<String> {
+        match &self.selected_models {
+            None => available.iter().take(DEFAULT_MODEL_COUNT).cloned().collect(),
+            Some(sel) => available.iter().filter(|m| sel.contains(m)).cloned().collect(),
+        }
+    }
+
     /// 出口代理：空字符串视为未配置。
     pub fn outbound(&self) -> Option<&str> {
         self.outbound_proxy.as_deref().map(str::trim).filter(|s| !s.is_empty())
@@ -65,4 +76,17 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
     fs::rename(&tmp, path).inspect_err(|_| {
         let _ = fs::remove_file(&tmp);
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn effective_models_default_and_selected() {
+        let avail: Vec<String> = (1..=8).rev().map(|i| format!("gpt-{i}")).collect();
+        let mut cfg = AppConfig::default();
+        assert_eq!(cfg.effective_models(&avail), avail[..6].to_vec());
+        cfg.selected_models = Some(vec!["gpt-1".into(), "gpt-8".into(), "gone".into()]);
+        assert_eq!(cfg.effective_models(&avail), ["gpt-8", "gpt-1"]);
+    }
 }

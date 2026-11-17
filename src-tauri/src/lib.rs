@@ -39,6 +39,11 @@ fn get_status(ctl: Ctl) -> StatusDto {
 }
 
 #[tauri::command]
+fn set_models(ctl: Ctl, models: Option<Vec<String>>) {
+    ctl.set_models(models);
+}
+
+#[tauri::command]
 fn set_takeover(ctl: Ctl, on: bool) {
     ctl.set_takeover(on);
 }
@@ -192,6 +197,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_status,
             set_takeover,
+            set_models,
             restart_proxy,
             kill_port_owner,
             save_config,

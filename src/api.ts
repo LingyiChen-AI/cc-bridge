@@ -21,6 +21,7 @@ export interface AppConfig {
   claude_dir: string | null;
   autostart: boolean;
   takeover: boolean;
+  selected_models: string[] | null;
 }
 
 export interface Status {
@@ -35,6 +36,7 @@ export interface Status {
   settingsPath: string;
   settingsError: string | null;
   models: string[];
+  selectedModels: string[];
   config: AppConfig;
   upstreamVersion: string;
   logsTail: string[];
