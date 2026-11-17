@@ -5,7 +5,7 @@ use serde_json::Value;
 use std::{collections::HashMap, fs, path::{Path, PathBuf}};
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum AuthState {
     /// 令牌有效，`expires_at` 为 unix 秒
     Ok { expires_at: i64 },

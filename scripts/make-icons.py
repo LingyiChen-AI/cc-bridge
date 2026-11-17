@@ -12,14 +12,17 @@ def glyph(size, bg, fg, dot=None):
     d = ImageDraw.Draw(im)
     k = size / 1024
     d.rounded_rectangle([40 * k, 40 * k, 984 * k, 984 * k], radius=230 * k, fill=bg)
-    w = max(2, int(78 * k))
-    # 两个相向的半弧 = 桥
-    d.arc([200 * k, 300 * k, 620 * k, 720 * k], 110, 250, fill=fg, width=w)
-    d.arc([404 * k, 300 * k, 824 * k, 720 * k], -70, 70, fill=fg, width=w)
-    d.line([330 * k, 512 * k, 694 * k, 512 * k], fill=fg, width=w)
-    for cx in (330, 694):
-        r = 64 * k
-        d.ellipse([cx * k - r, 512 * k - r, cx * k + r, 512 * k + r], fill=fg)
+    w = max(2, int(84 * k))
+    # 双向箭头 = 两端互通
+    def p(x, y):
+        return (x * k, y * k)
+    d.line([p(250, 390), p(774, 390)], fill=fg, width=w)
+    d.line([p(250, 634), p(774, 634)], fill=fg, width=w)
+    d.line([p(400, 240), p(250, 390), p(400, 540)], fill=fg, width=w, joint='curve')
+    d.line([p(624, 484), p(774, 634), p(624, 784)], fill=fg, width=w, joint='curve')
+    for x, y in ((250, 390), (774, 634), (400, 240), (400, 540), (624, 484), (624, 784), (774, 390), (250, 634)):
+        r = w / 2
+        d.ellipse([x * k - r, y * k - r, x * k + r, y * k + r], fill=fg)
     if dot:
         r = 190 * k
         cx, cy = 800 * k, 800 * k

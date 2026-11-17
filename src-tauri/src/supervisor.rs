@@ -22,7 +22,7 @@ const RESTART_WINDOW: Duration = Duration::from_secs(60);
 const MAX_HEALTH_FAILS: u32 = 3;
 
 #[derive(Serialize, Clone, Debug, PartialEq)]
-#[serde(tag = "kind", rename_all = "camelCase")]
+#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum ProxyState {
     Starting,
     Running,
