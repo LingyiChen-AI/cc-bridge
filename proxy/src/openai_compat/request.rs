@@ -67,8 +67,6 @@ pub fn extract_model(body: &Value) -> Result<(String, String), OpenAiError> {
 pub fn parse_request(
     surface: OpenAiSurface,
     body: Value,
-    provider: &str,
-    session_id: Option<&str>,
 ) -> Result<ParsedOpenAiRequest, OpenAiError> {
     let (requested_model, normalized_model) = extract_model(&body)?;
     let object = body
@@ -136,8 +134,7 @@ pub fn parse_request(
     } else {
         OpenAiResponseMetadata::default()
     };
-    let effort = parse_effort(surface, object, provider)?;
-    validate_cursor(provider, session_id, stream, &messages, &tools)?;
+    let effort = parse_effort(surface, object)?;
 
     let mut extra = Map::new();
     if !system.is_empty() {
@@ -299,7 +296,6 @@ fn parse_max_tokens(
 fn parse_effort(
     surface: OpenAiSurface,
     object: &Map<String, Value>,
-    provider: &str,
 ) -> Result<Option<String>, OpenAiError> {
     let value = match surface {
         OpenAiSurface::ChatCompletions => object.get("reasoning_effort"),
@@ -326,11 +322,7 @@ fn parse_effort(
             }),
         )
     })?;
-    let supported = if provider == "grok" {
-        ["none", "low", "medium", "high", "xhigh", "max"].as_slice()
-    } else {
-        ["low", "medium", "high", "xhigh", "max"].as_slice()
-    };
+    let supported = ["low", "medium", "high", "xhigh", "max"].as_slice();
     if supported.contains(&effort) {
         Ok(Some(effort.to_string()))
     } else {
@@ -964,60 +956,6 @@ fn image_url_block(url: &str, param: &str) -> Result<Value, OpenAiError> {
     }
 }
 
-fn validate_cursor(
-    provider: &str,
-    session_id: Option<&str>,
-    stream: bool,
-    messages: &[Message],
-    tools: &[Value],
-) -> Result<(), OpenAiError> {
-    if provider != "cursor" {
-        return Ok(());
-    }
-    if messages
-        .iter()
-        .any(|message| contains_url_image(&message.content))
-    {
-        return Err(OpenAiError::unsupported(
-            "input image URL for provider 'cursor'",
-        ));
-    }
-    if tools.is_empty() {
-        return Ok(());
-    }
-    if !stream {
-        return Err(OpenAiError::invalid(
-            "Cursor tools require 'stream' to be true",
-            Some("stream"),
-        ));
-    }
-    if session_id.is_none_or(str::is_empty) {
-        return Err(OpenAiError::invalid(
-            "Cursor tools require a stable session header",
-            Some("tools"),
-        ));
-    }
-    for (index, tool) in tools.iter().enumerate() {
-        let name = tool.get("name").and_then(Value::as_str).unwrap_or_default();
-        if !matches!(name, "Read" | "Write" | "Bash") {
-            return Err(OpenAiError::invalid(
-                format!("Cursor cannot bridge tool '{name}'"),
-                Some(format!("tools[{index}].function.name")),
-            ));
-        }
-    }
-    Ok(())
-}
-
-fn contains_url_image(content: &Value) -> bool {
-    content.as_array().is_some_and(|blocks| {
-        blocks.iter().any(|block| {
-            block.get("type").and_then(Value::as_str) == Some("image")
-                && block.pointer("/source/type").and_then(Value::as_str) == Some("url")
-        })
-    })
-}
-
 fn push_tool_result(messages: &mut Vec<Message>, result: Value) {
     if let Some(last) = messages.last_mut()
         && last.role == "user"
@@ -1124,7 +1062,7 @@ mod tests {
         let parsed = parse_request(
             OpenAiSurface::ChatCompletions,
             json!({
-                "model":"kimi-k2.6",
+                "model":"claude-sonnet-4-6",
                 "messages":[
                     {"role":"user","content":"look up x"},
                     {"role":"assistant","content":null,"tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{\"q\":\"x\"}"}}]},
@@ -1133,8 +1071,6 @@ mod tests {
                 "tools":[{"type":"function","function":{"name":"lookup","description":"lookup","parameters":{"type":"object"}}}],
                 "tool_choice":{"type":"function","function":{"name":"lookup"}}
             }),
-            "kimi",
-            Some("session"),
         )
         .unwrap();
         assert_eq!(parsed.messages.extra["tools"][0]["name"], "lookup");
@@ -1161,7 +1097,7 @@ mod tests {
         for parallel in [false, true] {
             for (choice, expected_type) in &cases {
                 let mut body = json!({
-                    "model":"kimi-k2.6",
+                    "model":"claude-sonnet-4-6",
                     "messages":[{"role":"user","content":"look up x"}],
                     "tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object"}}}],
                     "parallel_tool_calls":parallel,
@@ -1172,8 +1108,6 @@ mod tests {
                 let parsed = parse_request(
                     OpenAiSurface::ChatCompletions,
                     body,
-                    "kimi",
-                    Some("session"),
                 )
                 .unwrap();
                 let translated = &parsed.messages.extra["tool_choice"];
@@ -1188,14 +1122,12 @@ mod tests {
         let parsed = parse_request(
             OpenAiSurface::Responses,
             json!({
-                "model":"grok-4.5",
+                "model":"claude-sonnet-4-6",
                 "input":"look up x",
                 "tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
                 "tool_choice":{"type":"function","name":"lookup"},
                 "parallel_tool_calls":false,
             }),
-            "grok",
-            None,
         )
         .unwrap();
         assert_eq!(parsed.messages.extra["tool_choice"]["type"], "tool");
@@ -1209,9 +1141,7 @@ mod tests {
     fn parallel_tool_calls_must_be_boolean() {
         let error = parse_request(
             OpenAiSurface::Responses,
-            json!({"model":"grok-4.5","input":"hello","parallel_tool_calls":"false"}),
-            "grok",
-            None,
+            json!({"model":"claude-sonnet-4-6","input":"hello","parallel_tool_calls":"false"}),
         )
         .unwrap_err();
         assert_eq!(error.param.as_deref(), Some("parallel_tool_calls"));
@@ -1223,7 +1153,7 @@ mod tests {
         let parsed = parse_request(
             OpenAiSurface::Responses,
             json!({
-                "model":"grok-4.5",
+                "model":"claude-sonnet-4-6",
                 "instructions":"be concise",
                 "input":[
                     {"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]},
@@ -1232,8 +1162,6 @@ mod tests {
                 ],
                 "reasoning":{"effort":"high"}
             }),
-            "grok",
-            None,
         )
         .unwrap();
         assert_eq!(parsed.messages.extra["system"][0]["text"], "be concise");
@@ -1242,129 +1170,63 @@ mod tests {
     }
 
     #[test]
-    fn grok_effort_accepts_none_on_both_openai_surfaces() {
-        let chat = parse_request(
-            OpenAiSurface::ChatCompletions,
-            json!({
-                "model":"grok-4.5",
-                "messages":[{"role":"user","content":"hello"}],
-                "reasoning_effort":"none"
-            }),
-            "grok",
-            None,
-        )
-        .unwrap();
-        assert_eq!(chat.messages.extra["output_config"]["effort"], "none");
-
-        let responses = parse_request(
-            OpenAiSurface::Responses,
-            json!({
-                "model":"grok-4.5",
-                "input":"hello",
-                "reasoning":{"effort":"none"}
-            }),
-            "grok",
-            None,
-        )
-        .unwrap();
-        assert_eq!(responses.messages.extra["output_config"]["effort"], "none");
-    }
-
-    #[test]
-    fn non_grok_effort_rejects_none() {
+    fn effort_rejects_none() {
         let error = parse_request(
             OpenAiSurface::ChatCompletions,
             json!({
-                "model":"kimi-k2.6",
+                "model":"claude-sonnet-4-6",
                 "messages":[{"role":"user","content":"hello"}],
                 "reasoning_effort":"none"
             }),
-            "kimi",
-            None,
         )
         .unwrap_err();
         assert_eq!(error.param.as_deref(), Some("reasoning_effort"));
     }
 
     #[test]
-    fn rejects_unsupported_fields_and_cursor_tools_without_session() {
+    fn rejects_unsupported_fields() {
         let error = parse_request(
             OpenAiSurface::ChatCompletions,
-            json!({"model":"kimi-k2.6","messages":[{"role":"user","content":"x"}],"temperature":0.5}),
-            "kimi",
-            None,
+            json!({"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"x"}],"temperature":0.5}),
         )
         .unwrap_err();
         assert_eq!(error.param.as_deref(), Some("temperature"));
         assert_eq!(error.code.as_deref(), Some("unsupported_parameter"));
-
-        let error = parse_request(
-            OpenAiSurface::ChatCompletions,
-            json!({
-                "model":"cursor:gpt-5.5",
-                "stream":true,
-                "messages":[{"role":"user","content":"x"}],
-                "tools":[{"type":"function","function":{"name":"Read","parameters":{"type":"object"}}}]
-            }),
-            "cursor",
-            None,
-        )
-        .unwrap_err();
-        assert_eq!(error.param.as_deref(), Some("tools"));
     }
 
     #[test]
-    fn rejects_duplicate_results_store_and_buffered_cursor_tools() {
+    fn rejects_duplicate_results_and_store() {
         let duplicate = parse_request(
             OpenAiSurface::ChatCompletions,
             json!({
-                "model":"kimi-k2.6",
+                "model":"claude-sonnet-4-6",
                 "messages":[
                     {"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
                     {"role":"tool","tool_call_id":"call_1","content":"first"},
                     {"role":"tool","tool_call_id":"call_1","content":"second"}
                 ]
             }),
-            "kimi",
-            Some("session"),
         )
         .unwrap_err();
         assert!(duplicate.message.contains("unknown call"));
 
         let store = parse_request(
             OpenAiSurface::Responses,
-            json!({"model":"grok-4.5","input":"hello","store":true}),
-            "grok",
-            None,
+            json!({"model":"claude-sonnet-4-6","input":"hello","store":true}),
         )
         .unwrap_err();
         assert_eq!(store.param.as_deref(), Some("store"));
-
-        let cursor = parse_request(
-            OpenAiSurface::ChatCompletions,
-            json!({
-                "model":"cursor:gpt-5.5",
-                "messages":[{"role":"user","content":"x"}],
-                "tools":[{"type":"function","function":{"name":"Read","parameters":{"type":"object"}}}]
-            }),
-            "cursor",
-            Some("session"),
-        )
-        .unwrap_err();
-        assert_eq!(cursor.param.as_deref(), Some("stream"));
     }
 
     #[test]
     fn normalizes_model_and_preserves_requested_value() {
         let parsed = parse_request(
             OpenAiSurface::Responses,
-            json!({"model":"grok-4.5[1m]","input":"hello"}),
-            "grok",
-            None,
+            json!({"model":"claude-sonnet-4-6[1m]","input":"hello"}),
         )
         .unwrap();
-        assert_eq!(parsed.requested_model, "grok-4.5[1m]");
-        assert_eq!(parsed.normalized_model, "grok-4.5");
-        assert_eq!(parsed.messages.model.as_deref(), Some("grok-4.5"));
+        assert_eq!(parsed.requested_model, "claude-sonnet-4-6[1m]");
+        assert_eq!(parsed.normalized_model, "claude-sonnet-4-6");
+        assert_eq!(parsed.messages.model.as_deref(), Some("claude-sonnet-4-6"));
     }
 }

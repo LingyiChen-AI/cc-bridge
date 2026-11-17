@@ -93,7 +93,6 @@ pub(crate) fn record_session_request_with_affinity_update(
     {
         next.affinity_provider = Some(match provider_name {
             "codex" => AliasProvider::Codex,
-            "kimi" => AliasProvider::Kimi,
             _ => next.affinity_provider.unwrap_or(AliasProvider::Codex),
         });
     }
@@ -115,7 +114,7 @@ pub(crate) fn record_session_request_with_affinity_update(
 }
 
 fn is_alias_routable_provider(name: &str) -> bool {
-    matches!(name, "codex" | "kimi")
+    matches!(name, "codex")
 }
 
 #[cfg(test)]
@@ -160,25 +159,5 @@ mod tests {
             .collect();
         sequences.sort_unstable();
         assert_eq!(sequences, (2..=17).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn auxiliary_request_does_not_change_session_affinity() {
-        let session_id = "session-affinity-auxiliary-request-test";
-        let initial = record_session_request(Some(session_id), None, "codex", "gpt-5.6-sol", 1)
-            .expect("initial session");
-        assert_eq!(initial.affinity_provider, Some(AliasProvider::Codex));
-
-        let after_review = record_session_request_with_affinity_update(
-            Some(session_id),
-            Some(&initial),
-            "kimi",
-            "kimi-for-coding",
-            false,
-            2,
-        )
-        .expect("updated session");
-        assert_eq!(after_review.seq, 2);
-        assert_eq!(after_review.affinity_provider, Some(AliasProvider::Codex));
     }
 }

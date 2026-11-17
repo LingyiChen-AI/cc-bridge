@@ -236,12 +236,6 @@ fn config_env_precedence_and_defaults() {
 
     env.insert("PORT".to_string(), "19999".to_string());
     assert_eq!(load_config_for_env(&env).port, 19999);
-
-    env.insert("CCP_ALIAS_PROVIDER".to_string(), "kimi".to_string());
-    assert!(matches!(
-        load_config_for_env(&env).alias_provider,
-        AliasProvider::Kimi
-    ));
 }
 
 #[test]

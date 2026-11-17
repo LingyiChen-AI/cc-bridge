@@ -28,23 +28,6 @@ pub const ANTHROPIC_STYLE_ALIASES: &[&str] = &[
     "claude-fable-5-1",
 ];
 
-pub const CURSOR_PREFIXES: &[&str] = &["cursor:", "cursor-plan:", "cursor-ask:"];
-
-const CURSOR_LEGACY_MODELS: &[&str] = &[
-    "cursor",
-    "cursor-agent",
-    "cursor-composer",
-    "cursor-composer-fast",
-    "cursor-plan",
-    "cursor-ask",
-    "composer-2.5",
-    "composer-2.5-fast",
-];
-
-pub(crate) const KIMI_MODELS: &[&str] = &["kimi-for-coding", "kimi-k2.6", "kimi-k3", "k2.6", "k3"];
-pub(crate) const GROK_MODELS: &[&str] =
-    &["grok-composer-2.5-fast", "grok-4.5", "grok-4.6", "grok-4.7"];
-
 pub struct Registry {
     alias_provider: AliasProvider,
     dynamic_codex: bool,
@@ -66,26 +49,11 @@ impl Registry {
             "codex".into(),
             crate::providers::codex::translate::model_allowlist::listed_models(),
         );
-        models.insert(
-            "kimi".into(),
-            KIMI_MODELS.iter().map(|m| (*m).to_string()).collect(),
-        );
-        models.insert("cursor".into(), build_cursor_models());
-        models.insert(
-            "grok".into(),
-            GROK_MODELS
-                .iter()
-                .map(|model| (*model).to_string())
-                .collect(),
-        );
         let mut handlers = BTreeMap::new();
         for (name, entries) in &models {
             let handler: Arc<dyn Provider> = match name.as_str() {
                 "anthropic" => Arc::new(crate::providers::anthropic::AnthropicProvider::new()),
                 "codex" => Arc::new(crate::providers::codex::CodexProvider::new()),
-                "kimi" => Arc::new(crate::providers::kimi::KimiProvider::new()),
-                "cursor" => Arc::new(crate::providers::cursor::CursorProvider::new()),
-                "grok" => Arc::new(crate::providers::grok::GrokProvider::new()),
                 _ => Arc::new(PlaceholderProvider::new(name, entries.clone())),
             };
             handlers.insert(name.clone(), handler);
@@ -190,9 +158,6 @@ impl Registry {
         if is_anthropic_alias(&normalized) || normalized.starts_with("claude-") {
             return self.handlers.get(self.alias_provider.as_str()).cloned();
         }
-        if is_cursor_model(&normalized) {
-            return self.handlers.get("cursor").cloned();
-        }
 
         for (name, models) in &self.models {
             if !(self.dynamic_codex && name == "codex")
@@ -249,16 +214,6 @@ pub fn is_anthropic_alias(model: &str) -> bool {
     ANTHROPIC_STYLE_ALIASES.contains(&model)
 }
 
-pub fn is_cursor_model(model: &str) -> bool {
-    if CURSOR_LEGACY_MODELS.contains(&model) {
-        return true;
-    }
-
-    CURSOR_PREFIXES
-        .iter()
-        .any(|prefix| model.starts_with(prefix))
-}
-
 struct PlaceholderProvider {
     name: &'static str,
     models: Vec<String>,
@@ -268,9 +223,6 @@ impl PlaceholderProvider {
     fn new(name: &str, models: Vec<String>) -> Self {
         let name = match name {
             "codex" => "codex",
-            "kimi" => "kimi",
-            "cursor" => "cursor",
-            "grok" => "grok",
             _ => "codex",
         };
         Self { name, models }
@@ -290,9 +242,6 @@ impl Provider for PlaceholderProvider {
     fn cli(&self) -> &'static dyn CliHandlers {
         match self.name {
             "codex" => &CODEX_CLI,
-            "kimi" => &KIMI_CLI,
-            "cursor" => &CURSOR_CLI,
-            "grok" => &GROK_CLI,
             _ => &CODEX_CLI,
         }
     }
@@ -349,17 +298,6 @@ impl CliHandlers for PlaceholderCli {
 }
 
 const CODEX_CLI: PlaceholderCli = PlaceholderCli { provider: "codex" };
-const KIMI_CLI: PlaceholderCli = PlaceholderCli { provider: "kimi" };
-const CURSOR_CLI: PlaceholderCli = PlaceholderCli { provider: "cursor" };
-const GROK_CLI: PlaceholderCli = PlaceholderCli { provider: "grok" };
-fn build_cursor_models() -> Vec<String> {
-    let mut out: Vec<String> = CURSOR_LEGACY_MODELS
-        .iter()
-        .map(|s| (*s).to_string())
-        .collect();
-    out.sort_unstable();
-    out
-}
 
 #[cfg(test)]
 mod tests {
@@ -382,7 +320,7 @@ mod tests {
         }
 
         fn missing_login_hint(&self) -> Option<&'static str> {
-            Some("run `claude-codex kimi auth login`")
+            Some("run `codex login`")
         }
 
         async fn handle_messages(&self, body: MessagesRequest, ctx: RequestContext) -> Response {
@@ -401,31 +339,31 @@ mod tests {
     #[test]
     fn signed_out_backends_are_named_instead_of_listed() {
         let registry = Registry::from_providers(
-            AliasProvider::Codex,
+            AliasProvider::Anthropic,
             [
-                Arc::new(PlaceholderProvider::new("codex", vec!["gpt-toy".into()]))
+                Arc::new(crate::providers::anthropic::AnthropicProvider::new())
                     as Arc<dyn Provider>,
                 Arc::new(SignedOut(PlaceholderProvider::new(
-                    "kimi",
-                    vec!["kimi-toy".into()],
+                    "codex",
+                    vec!["gpt-toy".into()],
                 ))),
             ],
         );
 
         assert_eq!(
             registry.signed_out(),
-            BTreeMap::from([("kimi", "run `claude-codex kimi auth login`")])
+            BTreeMap::from([("codex", "run `codex login`")])
         );
         assert_eq!(
             registry
-                .provider_for_model("kimi-toy", None)
+                .provider_for_model("gpt-toy", None)
                 .unwrap()
                 .name(),
-            "kimi"
+            "codex"
         );
         let message = registry.unknown_model_message();
-        assert!(message.contains("gpt-toy") && !message.contains("kimi-toy"));
-        assert!(message.ends_with("Not signed in: kimi (run `claude-codex kimi auth login`)."));
+        assert!(message.contains("opus") && !message.contains("gpt-toy"));
+        assert!(message.ends_with("Not signed in: codex (run `codex login`)."));
     }
 
     #[test]
@@ -457,14 +395,6 @@ mod tests {
                 "{model}"
             );
         }
-    }
-
-    #[test]
-    fn alias_routes_to_configured_provider() {
-        let registry = Registry::new(AliasProvider::Kimi);
-        let p = registry.provider_for_model("haiku", None);
-        assert!(p.is_some());
-        assert_eq!(p.expect("provider").name(), "kimi");
     }
 
     #[test]
@@ -522,44 +452,6 @@ mod tests {
         let registry = Registry::new(AliasProvider::Anthropic);
         let p = registry.provider_for_model("claude-opus-4-8", Some(&AliasProvider::Codex));
         assert_eq!(p.expect("provider").name(), "anthropic");
-    }
-
-    #[test]
-    fn cursor_prefix_routes() {
-        let registry = Registry::new(AliasProvider::Codex);
-        assert_eq!(
-            registry
-                .provider_for_model("cursor:gpt-5.5", None)
-                .unwrap()
-                .name(),
-            "cursor"
-        );
-        assert_eq!(
-            registry
-                .provider_for_model("cursor-plan:gpt-5.5", None)
-                .unwrap()
-                .name(),
-            "cursor"
-        );
-        assert_eq!(
-            registry
-                .provider_for_model("cursor-ask:gpt-5.5", None)
-                .unwrap()
-                .name(),
-            "cursor"
-        );
-    }
-
-    #[test]
-    fn grok_4_7_routes_to_grok() {
-        let registry = Registry::new(AliasProvider::Codex);
-        assert_eq!(
-            registry
-                .provider_for_model("grok-4.7", None)
-                .unwrap()
-                .name(),
-            "grok"
-        );
     }
 
     #[test]

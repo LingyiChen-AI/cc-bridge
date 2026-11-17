@@ -963,12 +963,7 @@ async fn handler_responses(State(state): State<Arc<AppState>>, req: Request<Body
         }
         None
     } else {
-        match parse_request(
-            OpenAiSurface::Responses,
-            body.clone(),
-            provider.name(),
-            session_id.as_deref(),
-        ) {
+        match parse_request(OpenAiSurface::Responses, body.clone()) {
             Ok(parsed) => Some(parsed),
             Err(error) => return monitor_response_body(error.response(), request_guard),
         }
@@ -1197,12 +1192,7 @@ async fn handler_chat_completions(
         };
         (Some(translated), None)
     } else {
-        let parsed = match parse_request(
-            OpenAiSurface::ChatCompletions,
-            body.clone(),
-            provider.name(),
-            session_id.as_deref(),
-        ) {
+        let parsed = match parse_request(OpenAiSurface::ChatCompletions, body.clone()) {
             Ok(parsed) => parsed,
             Err(error) => return monitor_response_body(error.response(), request_guard),
         };
@@ -2413,9 +2403,9 @@ mod auto_review_tests {
             false,
             json!([]),
         );
-        classifier.model = Some("kimi-for-coding".to_string());
-        assert!(apply_auto_review_model(&mut classifier, false, None, "kimi").is_none());
-        assert_eq!(classifier.model.as_deref(), Some("kimi-for-coding"));
+        classifier.model = Some("claude-opus-4-8".to_string());
+        assert!(apply_auto_review_model(&mut classifier, false, None, "anthropic").is_none());
+        assert_eq!(classifier.model.as_deref(), Some("claude-opus-4-8"));
     }
 
     #[test]
@@ -2425,61 +2415,10 @@ mod auto_review_tests {
             false,
             json!([]),
         );
-        let route = apply_auto_review_model(&mut classifier, false, Some("grok-4.5"), "codex")
+        let route = apply_auto_review_model(&mut classifier, false, Some("gpt-5.4"), "codex")
             .expect("configured classifier should be routed");
-        assert_eq!(route.override_model, "grok-4.5");
-        assert_eq!(classifier.model.as_deref(), Some("grok-4.5"));
-    }
-
-    #[test]
-    fn grok_session_classifier_routes_by_requested_model_or_explicit_override() {
-        use crate::config::AliasProvider;
-        use crate::registry::Registry;
-        use crate::session::{record_session_request, record_session_request_with_affinity_update};
-
-        let registry = Registry::new(AliasProvider::Codex);
-        let session_id = "grok-session-classifier-routing";
-        let initial = record_session_request(Some(session_id), None, "grok", "grok-4.6", 1)
-            .expect("Grok session");
-        assert_eq!(initial.affinity_provider, None);
-
-        for (requested, configured, expected_provider, expected_model) in [
-            ("claude-sonnet-4-6", None, "codex", "gpt-6-luna"),
-            ("grok-4.6", None, "grok", "grok-4.6"),
-            ("claude-sonnet-4-6", Some("grok-4.6"), "grok", "grok-4.6"),
-            ("gpt-6-luna", Some("grok-4.6"), "grok", "grok-4.6"),
-        ] {
-            let mut classifier = request(
-                "You are a security monitor for autonomous AI coding agents.",
-                false,
-                json!([]),
-            );
-            classifier.model = Some(requested.to_string());
-            let original = registry
-                .provider_for_model(requested, initial.affinity_provider.as_ref())
-                .expect("original provider");
-            let route =
-                apply_auto_review_model(&mut classifier, false, configured, original.name());
-            let model = classifier.model.as_deref().expect("classifier model");
-            let provider = if route.is_some() {
-                registry.provider_for_model(model, None).expect("override")
-            } else {
-                original
-            };
-            assert_eq!(provider.name(), expected_provider);
-            assert_eq!(model, expected_model);
-
-            let after_review = record_session_request_with_affinity_update(
-                Some(session_id),
-                Some(&initial),
-                provider.name(),
-                model,
-                route.is_none(),
-                2,
-            )
-            .expect("session after review");
-            assert_eq!(after_review.affinity_provider, None);
-        }
+        assert_eq!(route.override_model, "gpt-5.4");
+        assert_eq!(classifier.model.as_deref(), Some("gpt-5.4"));
     }
 
     #[test]
@@ -2521,7 +2460,7 @@ mod auto_review_tests {
             json!([]),
         );
         assert!(
-            apply_auto_review_model(&mut classifier, true, Some("grok-4.5"), "codex").is_none()
+            apply_auto_review_model(&mut classifier, true, Some("gpt-5.4"), "codex").is_none()
         );
         assert_eq!(classifier.model.as_deref(), Some("gpt-5.6-sol"));
     }

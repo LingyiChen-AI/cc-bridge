@@ -556,7 +556,7 @@ mod tests {
         vec![
             SseEvent {
                 event: Some("message_start".into()),
-                data: json!({"type":"message_start","message":{"id":"msg_1","model":"kimi-k2.6","usage":{"input_tokens":7}}}),
+                data: json!({"type":"message_start","message":{"id":"msg_1","model":"claude-sonnet-4-6","usage":{"input_tokens":7}}}),
             },
             SseEvent {
                 event: Some("content_block_start".into()),
@@ -649,7 +649,7 @@ mod tests {
             OpenAiSurface::Responses,
             &events,
             "resp_test",
-            "grok-4.5",
+            "claude-sonnet-4-6",
             1,
             &OpenAiResponseMetadata::default(),
         )
@@ -679,7 +679,7 @@ mod tests {
             OpenAiSurface::ChatCompletions,
             &events(),
             "chatcmpl_test",
-            "kimi-k2.6",
+            "claude-sonnet-4-6",
             1,
             &OpenAiResponseMetadata::default(),
         )
@@ -699,7 +699,7 @@ mod tests {
             OpenAiSurface::Responses,
             &events(),
             "resp_test",
-            "kimi-k2.6",
+            "claude-sonnet-4-6",
             1,
             &OpenAiResponseMetadata::default(),
         )

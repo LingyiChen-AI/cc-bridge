@@ -695,8 +695,6 @@ fn provider_cell(value: Option<&str>) -> Cell<'static> {
     let value = value.unwrap_or("-");
     let color = match value {
         "codex" => TEAL,
-        "kimi" => Color::Rgb(190, 150, 220),
-        "cursor" => Color::Rgb(140, 170, 230),
         "-" => DIM,
         _ => DIM_WHITE,
     };
@@ -1742,7 +1740,7 @@ fn mock_setup_text(port: u16, registry: &Registry) -> String {
 
 pub fn setup_text(port: u16, registry: &Registry) -> String {
     let grouped = registry.grouped_models();
-    let model_summary = ["codex", "kimi", "cursor"]
+    let model_summary = ["codex"]
         .into_iter()
         .filter_map(|provider| {
             grouped
@@ -2501,7 +2499,7 @@ mod tests {
         let failed = state
             .recent
             .iter()
-            .position(|request| request.request_id == "req-failed-kimi")
+            .position(|request| request.request_id == "req-failed-anthropic")
             .unwrap();
 
         let detail = draw(140, 22, |frame| {
@@ -2509,9 +2507,9 @@ mod tests {
         });
         let text = buffer_text(&detail);
 
-        assert!(text.contains("req-failed-kimi"), "{text}");
+        assert!(text.contains("req-failed-anthropic"), "{text}");
         assert!(text.contains("upstream connection closed"), "{text}");
-        assert!(text.contains("req-failed-kimi.json"), "{text}");
+        assert!(text.contains("req-failed-anthropic.json"), "{text}");
     }
 
     #[test]
