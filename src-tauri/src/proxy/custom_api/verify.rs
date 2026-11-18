@@ -181,11 +181,13 @@ fn sse_event_names(text: &str) -> Vec<String> {
         .collect()
 }
 
+/// `ping` 是 Anthropic SSE 的保活事件，可出现在任意位置（中转站常在 message_start 前先发），判断顺序时忽略。
 fn is_claude_stream(events: &[String]) -> bool {
-    events.first().is_some_and(|e| e == "message_start")
-        && events.iter().any(|e| e == "content_block_start")
-        && events.iter().any(|e| e == "message_delta")
-        && events.last().is_some_and(|e| e == "message_stop")
+    let events: Vec<&String> = events.iter().filter(|e| *e != "ping").collect();
+    events.first().is_some_and(|e| *e == "message_start")
+        && events.iter().any(|e| *e == "content_block_start")
+        && events.iter().any(|e| *e == "message_delta")
+        && events.last().is_some_and(|e| *e == "message_stop")
 }
 
 async fn step_format(up: &Upstream<'_>, style: &AuthStyle, model: &str, auth_resp: &Value) -> StepResult {
@@ -636,6 +638,7 @@ mod tests {
     #[tokio::test]
     async fn wrong_tokenizer_fails_before_signature() {
         let mut up = FakeUpstream::new("claude-opus-5-5");
+        // opus-5-5 有 usage_input 基准，count_tokens 不符后改比 usage（假上游为 20）。
         up.count_tokens = 55;
         let r = run(up, "claude-opus-5-5").await;
         assert!(!r.ok);
@@ -644,7 +647,7 @@ mod tests {
         assert_eq!(
             r.steps[2].1,
             StepResult::Fail {
-                reason: "分词结果和 Claude 不一致（得到 55，应为 68），可能不是 Claude 模型".into()
+                reason: "分词结果和 Claude 不一致（得到 20，应为 68），可能不是 Claude 模型".into()
             }
         );
     }
@@ -769,6 +772,17 @@ mod tests {
         up.bad_sse = true;
         let r = run(up, "claude-opus-5-5").await;
         assert_eq!(last_fail(&r), (StepId::Format, "不是 Claude 格式的接口".into()));
+    }
+
+    #[test]
+    fn stream_check_ignores_ping_events() {
+        let ev = |names: &[&str]| names.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // 中转站常在 message_start 前先发 ping 保活（UCloud modelverse 实测，2026-11-18）。
+        assert!(is_claude_stream(&ev(&[
+            "ping", "message_start", "content_block_start", "ping", "message_delta", "message_stop"
+        ])));
+        assert!(!is_claude_stream(&ev(&["ping", "content_block_start", "message_delta", "message_stop"])));
+        assert!(!is_claude_stream(&ev(&["message_start", "content_block_start", "message_delta", "ping"])));
     }
 
     #[tokio::test]

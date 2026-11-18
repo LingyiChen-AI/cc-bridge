@@ -13,16 +13,21 @@ pub struct Baseline {
 }
 
 /// (型号前缀, count_tokens, usage_input)
+///
+/// 2026-11-18 经 Claude 订阅（官方 Anthropic）实测：count_tokens 直接测 `FIXED_TEXT`；
+/// usage_input 用「Claude Code system 提示 + FIXED_TEXT」同时测 count_tokens 与 messages，
+/// 各型号两者均相等，故 usage_input 取 count_tokens 同值。基准不从被测接口取（它不能自证）。
 const TABLE: &[(&str, u32, Option<u32>)] = &[
-    ("claude-haiku-4-5", 60, None),
-    ("claude-sonnet-4-6", 60, None),
-    ("claude-sonnet-5", 66, None),
-    ("claude-opus-4-8", 66, None),
-    ("claude-opus-5", 66, None),
-    ("claude-sonnet-5-5", 68, None),
-    ("claude-opus-5-5", 68, None),
-    ("claude-fable-5-1", 68, None),
-    ("claude-opus-4-7", 71, None),
+    ("claude-haiku-4-5", 60, Some(60)),
+    ("claude-sonnet-4-6", 60, Some(60)),
+    ("claude-sonnet-5", 66, Some(66)),
+    ("claude-opus-4-8", 66, Some(66)),
+    ("claude-opus-5", 66, Some(66)),
+    ("claude-haiku-5-5", 68, Some(68)),
+    ("claude-sonnet-5-5", 68, Some(68)),
+    ("claude-opus-5-5", 68, Some(68)),
+    ("claude-fable-5-1", 68, Some(68)),
+    ("claude-opus-4-7", 71, Some(71)),
 ];
 
 /// 去掉结尾的 `-YYYYMMDD`。
@@ -68,5 +73,15 @@ mod tests {
         assert_eq!(baseline("claude-opus-5-5-20260101").unwrap().count_tokens, 68);
         assert_eq!(baseline("claude-opus-4-7").unwrap().count_tokens, 71);
         assert!(baseline("claude-opus-50").is_none());
+    }
+
+    #[test]
+    fn baseline_covers_haiku_5_5_with_usage_input() {
+        assert_eq!(
+            baseline("claude-haiku-5-5"),
+            Some(Baseline { count_tokens: 68, usage_input: Some(68) })
+        );
+        assert_eq!(baseline("claude-opus-4-7").unwrap().usage_input, Some(71));
+        assert!(TABLE.iter().all(|(_, _, usage)| usage.is_some()));
     }
 }
