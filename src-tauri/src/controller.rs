@@ -47,6 +47,39 @@ pub(crate) fn takeover_models(selected_codex: Vec<String>, custom: Vec<String>) 
     v
 }
 
+/// `scheme://host[:port]`，小写；用来判断编辑时是否换了接口地址。
+fn origin(base_url: &str) -> String {
+    let (scheme, rest) = base_url.split_once("://").unwrap_or(("", base_url));
+    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
+    format!("{scheme}://{host}").to_ascii_lowercase()
+}
+
+/// 决定保存时用哪个 key：填了就校验后用新的；没填时沿用旧 key，但换了接口地址（scheme / 主机 / 端口）
+/// 必须重新填，否则旧 key 会被发往新地址。`base_url` 为已规范化的地址。
+pub(crate) fn resolve_key(typed: &str, old: Option<&CustomApi>, base_url: &str) -> Result<String, String> {
+    if !typed.is_empty() {
+        validate_key(typed)?;
+        return Ok(typed.to_string());
+    }
+    match old {
+        None => Err("请填写 API Key".into()),
+        Some(o) if origin(&o.base_url) != origin(base_url) => Err("更换了接口地址，请重新填写 API Key".into()),
+        Some(o) => Ok(o.api_key.clone()),
+    }
+}
+
+/// 重新校验后更新条目：通过则刷新时间与认证方式；判定类失败清除已验证；网络类失败保持原状。
+pub(crate) fn apply_reverify(e: &mut CustomApi, report: &VerifyReport, at: u64) {
+    if report.ok {
+        e.verified_at = Some(at);
+        if let Some(a) = report.auth_style.clone() {
+            e.auth_style = a;
+        }
+    } else if !report.transient {
+        e.verified_at = None;
+    }
+}
+
 /// 是否应当接管：Codex 模型和自定义 API 任一非空即可。
 pub(crate) fn want_takeover(onboarded: bool, takeover: bool, running: bool, codex_empty: bool, custom_empty: bool) -> bool {
     onboarded && takeover && running && !(codex_empty && custom_empty)
@@ -325,15 +358,7 @@ impl Controller {
         let existing = self.custom.lock().unwrap().clone();
         let old = input.id.as_ref().and_then(|id| existing.iter().find(|e| &e.id == id)).cloned();
         let typed = input.api_key.as_deref().map(str::trim).unwrap_or("");
-        let api_key = if typed.is_empty() {
-            match &old {
-                Some(o) => o.api_key.clone(),
-                None => return Err("请填写 API Key".into()),
-            }
-        } else {
-            validate_key(typed)?;
-            typed.to_string()
-        };
+        let api_key = resolve_key(typed, old.as_ref(), &base_url)?;
         let mut cand = CustomApi {
             id: input.id.clone().unwrap_or_else(new_id),
             base_url,
@@ -360,14 +385,7 @@ impl Controller {
         let report = self.run_verify(&entry).await;
         let mut v = self.custom.lock().unwrap().clone();
         if let Some(e) = v.iter_mut().find(|e| e.id == id) {
-            if report.ok {
-                e.verified_at = Some(now() as u64);
-                if let Some(a) = report.auth_style.clone() {
-                    e.auth_style = a;
-                }
-            } else {
-                e.verified_at = None;
-            }
+            apply_reverify(e, &report, now() as u64);
         }
         self.commit_custom(v)?;
         Ok(report)
@@ -477,6 +495,39 @@ mod tests {
         assert!(!want_takeover(false, true, true, false, false));
         assert!(!want_takeover(true, false, true, false, false));
         assert!(!want_takeover(true, true, false, false, false));
+    }
+
+    #[test]
+    fn empty_key_with_changed_host_is_rejected() {
+        let old = api("a", Some(1));
+        assert_eq!(resolve_key("", Some(&old), "https://relay.example.com/anthropic").unwrap(), "k");
+        assert_eq!(resolve_key("", Some(&old), "https://RELAY.example.com").unwrap(), "k");
+        for moved in ["https://evil.example.com", "https://relay.example.com:8443", "http://relay.example.com"] {
+            assert_eq!(
+                resolve_key("", Some(&old), moved).unwrap_err(),
+                "更换了接口地址，请重新填写 API Key",
+                "{moved}"
+            );
+        }
+        assert_eq!(resolve_key("sk-new", Some(&old), "https://evil.example.com").unwrap(), "sk-new");
+        assert_eq!(resolve_key("", None, "https://relay.example.com").unwrap_err(), "请填写 API Key");
+        assert!(resolve_key("sk bad", None, "https://relay.example.com").is_err());
+    }
+
+    fn report(ok: bool, transient: bool) -> VerifyReport {
+        VerifyReport { steps: vec![], auth_style: Some(AuthStyle::Bearer), ok, transient }
+    }
+
+    #[test]
+    fn reverify_keeps_verified_on_network_failure() {
+        let mut e = api("a", Some(1));
+        apply_reverify(&mut e, &report(false, true), 9);
+        assert_eq!(e.verified_at, Some(1));
+        assert_eq!(e.auth_style, AuthStyle::XApiKey);
+        apply_reverify(&mut e, &report(true, false), 9);
+        assert_eq!((e.verified_at, e.auth_style.clone()), (Some(9), AuthStyle::Bearer));
+        apply_reverify(&mut e, &report(false, false), 10);
+        assert_eq!(e.verified_at, None);
     }
 
     #[test]

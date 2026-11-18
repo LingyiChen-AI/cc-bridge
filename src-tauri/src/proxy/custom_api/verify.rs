@@ -7,6 +7,7 @@
 use reqwest::header::HeaderValue;
 use serde::Serialize;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU16, Ordering};
 use std::time::Duration;
 
 use super::fingerprint::{Baseline, FIXED_TEXT, baseline};
@@ -44,6 +45,13 @@ pub struct VerifyReport {
     pub steps: Vec<(StepId, StepResult)>,
     pub auth_style: Option<AuthStyle>,
     pub ok: bool,
+    /// 失败是网络类（请求失败 / 超时、HTTP 5xx、429），不是对接口真伪的判定；重新校验时据此保留已验证状态。
+    pub transient: bool,
+}
+
+/// 最后一次上游请求的结果是否属于网络类问题：0 表示请求本身失败（连接 / 超时 / 读响应），以及 429、5xx。
+pub(crate) fn is_transient_status(status: u16) -> bool {
+    status == 0 || status == 429 || status >= 500
 }
 
 fn fail(reason: impl Into<String>) -> StepResult {
@@ -110,6 +118,8 @@ struct Upstream<'a> {
     client: &'a reqwest::Client,
     base: String,
     key: &'a str,
+    /// 最后一次请求的 HTTP 状态，0 表示请求失败（见 `is_transient_status`）。
+    last: AtomicU16,
 }
 
 impl Upstream<'_> {
@@ -120,6 +130,7 @@ impl Upstream<'_> {
         };
         let mut auth = HeaderValue::from_str(&raw).map_err(|_| "API Key 含有非法字符".to_string())?;
         auth.set_sensitive(true);
+        self.last.store(0, Ordering::SeqCst);
         let resp = self
             .client
             .post(format!("{}{}", self.base, path))
@@ -136,6 +147,7 @@ impl Upstream<'_> {
             .text()
             .await
             .map_err(|e| format!("读取响应失败：{}", describe_error(e)))?;
+        self.last.store(status, Ordering::SeqCst);
         Ok(Resp { status, text })
     }
 }
@@ -344,6 +356,13 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str, token
         Ok(r) => r,
         Err(e) => return fail(format!("签名测试异常：{e}")),
     };
+    let signature_error = tampered_resp.status == 400
+        && tampered_resp.json()["error"]["message"]
+            .as_str()
+            .is_some_and(|m| m.to_ascii_lowercase().contains("signature"));
+    if !signature_error && !tampered_resp.ok() {
+        return fail(format!("签名测试异常：HTTP {}", tampered_resp.status));
+    }
 
     // 对照：原签名回放必须成功，排除「任何回放都以含 signature 的 400 拒绝」的接口；
     // 其总输入作为差分判据的基准。签名报错判据也要在对照成功后才算数。
@@ -356,21 +375,13 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str, token
         Err(e) => return fail(format!("签名测试异常：{e}")),
     };
 
-    let r = tampered_resp;
-    if r.status == 400
-        && r.json()["error"]["message"]
-            .as_str()
-            .is_some_and(|m| m.to_ascii_lowercase().contains("signature"))
-    {
+    if signature_error {
         return StepResult::Pass;
-    }
-    if !r.ok() {
-        return fail(format!("签名测试异常：HTTP {}", r.status));
     }
     if !tokenizer_passed {
         return fail(SKIP_TOKENIZER_DIFF_FAIL);
     }
-    if stripped_by_relay(original_tokens, total_input(&r.json())) {
+    if stripped_by_relay(original_tokens, total_input(&tampered_resp.json())) {
         StepResult::Pass
     } else {
         fail("签名没有被校验，不是真正的 Claude")
@@ -430,6 +441,7 @@ pub async fn verify(
         steps: Vec::new(),
         auth_style: None,
         ok: false,
+        transient: false,
     };
     let record = |report: &mut VerifyReport, id: StepId, result: StepResult| -> bool {
         let result = match result {
@@ -451,31 +463,36 @@ pub async fn verify(
             return report;
         }
     };
-    let up = Upstream { client, base, key: api_key };
+    let up = Upstream { client, base, key: api_key, last: AtomicU16::new(200) };
+    // 遇到第一个 Fail 即停，此时最后一次请求就是导致失败的那次。
+    let done = |mut report: VerifyReport| {
+        report.transient = !report.ok && is_transient_status(up.last.load(Ordering::SeqCst));
+        report
+    };
 
     let (result, style, auth_resp) = step_auth(&up, model).await;
     if !record(&mut report, StepId::Auth, result) {
-        return report;
+        return done(report);
     }
     let style = style.unwrap_or(AuthStyle::XApiKey);
     report.auth_style = Some(style.clone());
 
     let result = step_format(&up, &style, model, &auth_resp).await;
     if !record(&mut report, StepId::Format, result) {
-        return report;
+        return done(report);
     }
     let result = step_tokenizer(&up, &style, model, baseline(model)).await;
     let tokenizer_passed = result == StepResult::Pass;
     if !record(&mut report, StepId::Tokenizer, result) {
-        return report;
+        return done(report);
     }
     let result = step_signature(&up, &style, model, tokenizer_passed).await;
     if !record(&mut report, StepId::Signature, result) {
-        return report;
+        return done(report);
     }
     let result = step_model_name(model, &auth_resp);
     report.ok = record(&mut report, StepId::ModelName, result);
-    report
+    done(report)
 }
 
 #[cfg(test)]
@@ -1056,7 +1073,7 @@ mod tests {
             let mut fake = FakeUpstream::new("claude-opus-5-5");
             fake.count_tokens = 55;
             fake.usage_input = usage;
-            let up = Upstream { client: &client, base: serve(fake).await, key: KEY };
+            let up = Upstream { client: &client, base: serve(fake).await, key: KEY, last: AtomicU16::new(200) };
             let got = step_tokenizer(&up, &AuthStyle::XApiKey, "claude-opus-5-5", want.clone()).await;
             assert_eq!(got, expected, "usage={usage}");
         }
@@ -1097,6 +1114,50 @@ mod tests {
         assert_eq!(reason, crate::proxy::custom_api::validate_model("qwen3-max").unwrap_err());
         let r = verify(&client, "api.x.com", KEY, "claude-opus-5-5", |_, _| {}).await;
         assert_eq!(last_fail(&r), (StepId::Auth, "Base URL 必须以 http:// 或 https:// 开头".into()));
+    }
+
+    #[test]
+    fn transient_status_classification() {
+        for s in [0, 429, 500, 502, 503, 529] {
+            assert!(is_transient_status(s), "{s}");
+        }
+        for s in [200, 400, 401, 403, 404, 422] {
+            assert!(!is_transient_status(s), "{s}");
+        }
+    }
+
+    #[tokio::test]
+    async fn report_marks_network_failures_transient() {
+        // 上游 5xx / 429：网络类
+        for status in [500u16, 503, 429] {
+            let mut up = FakeUpstream::new("claude-opus-5-5");
+            up.tampered_reply = Some((status, "overloaded"));
+            let r = run(up, "claude-opus-5-5").await;
+            assert!(!r.ok && r.transient, "{status}: {r:?}");
+        }
+        // 连接失败：网络类
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let r = verify(&client, "http://127.0.0.1:9", KEY, "claude-opus-5-5", |_, _| {}).await;
+        assert!(!r.ok && r.transient, "{r:?}");
+        // 判定类：签名没校验、格式不对、分词不符、400 非签名报错、模型名不符、认证 401、输入不合法
+        let mut fake = FakeUpstream::new("claude-opus-5-5");
+        fake.genuine = false;
+        let mut bad_json = FakeUpstream::new("claude-opus-5-5");
+        bad_json.bad_json = true;
+        let mut bad_tok = FakeUpstream::new("claude-opus-5-5");
+        bad_tok.count_tokens = 55;
+        let mut bad_400 = FakeUpstream::new("claude-opus-5-5");
+        bad_400.tampered_reply = Some((400, "messages: invalid request"));
+        for up in [fake, bad_json, bad_tok, bad_400, FakeUpstream::new("claude-sonnet-5-5")] {
+            let r = run(up, "claude-opus-5-5").await;
+            assert!(!r.ok && !r.transient, "{r:?}");
+        }
+        let base = serve(FakeUpstream::new("claude-opus-5-5")).await;
+        let r = verify(&client, &base, "sk-wrong-key-abcdefghijk", "claude-opus-5-5", |_, _| {}).await;
+        assert!(!r.ok && !r.transient, "{r:?}");
+        let r = verify(&client, "api.x.com", KEY, "claude-opus-5-5", |_, _| {}).await;
+        assert!(!r.ok && !r.transient, "{r:?}");
+        assert!(!run(FakeUpstream::new("claude-opus-5-5"), "claude-opus-5-5").await.transient);
     }
 
     #[test]
