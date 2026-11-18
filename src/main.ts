@@ -32,6 +32,8 @@ let activity: Overview | null = null;
 interface CapiForm { id: string | null; mask: string; url: string; key: string; model: string; running: boolean; steps: Partial<Record<StepId, StepResult>>; error: string | null; failed: boolean }
 const CAPI_STEPS: StepId[] = ['auth', 'format', 'tokenizer', 'signature', 'modelName'];
 let capi: CapiForm | null = null;
+// 删除确认弹窗：待删除条目的 id 与模型名
+let capiDel: { id: string; model: string } | null = null;
 
 let tab: Tab = 'home';
 let feedMode: 'req' | 'raw' = 'req';
@@ -126,7 +128,7 @@ function renderMain(s: Status) {
     <main class="body" id="body">${body}</main>
     <nav class="tabs" role="tablist">${tabs.map(([k, ic, l]) => `<button role="tab" aria-selected="${tab === k}" class="${tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${ic}<span>${l}</span>${
       k === 'feed' && newErrors() ? '<i class="badge"></i>' : k === 'settings' && update ? '<i class="badge acc"></i>' : ''}</button>`).join('')}</nav>
-    ${sheetOpen && update ? updateSheet(update) : ''}${capi ? capiSheet(capi) : ''}`;
+    ${sheetOpen && update ? updateSheet(update) : ''}${capi ? capiSheet(capi) : ''}${capiDel ? capiDelSheet(capiDel) : ''}`;
   const logs = document.getElementById('logs');
   if (logs) logs.scrollTop = logs.scrollHeight;
 }
@@ -229,6 +231,14 @@ function capiSheet(f: CapiForm) {
       ${showSteps ? `<ul class="steps">${CAPI_STEPS.map(stepRow).join('')}</ul>` : ''}
       <div class="sheet-acts"><button class="btn" data-act="capi-close" ${f.running ? 'disabled' : ''}>${t('capiCancel')}</button>
         <button class="btn pri grow" data-act="capi-save" ${lock}>${f.running ? '<span class="spinner"></span> ' : ''}${t('capiSave')}</button></div></div>`;
+}
+
+function capiDelSheet(d: { id: string; model: string }) {
+  return `<div class="mask" data-act="capi-del-cancel"></div>
+    <div class="sheet" role="alertdialog" aria-modal="true" aria-label="${esc(t('capiDelConfirm'))}"><div class="grab"></div>
+      <h3>${esc(t('capiDelConfirm'))}</h3><div class="sheet-sub">${esc(d.model)}</div>
+      <div class="sheet-acts"><button class="btn" data-act="capi-del-cancel">${t('capiCancel')}</button>
+        <button class="btn danger grow" data-act="capi-del-ok">${t('capiDel')}</button></div></div>`;
 }
 
 async function capiRun(verifyId: string | null) {
@@ -593,9 +603,21 @@ async function act(name: string, el: HTMLElement): Promise<void> {
       }
       case 'capi-save': await capiRun(null); break;
       case 'capi-close': if (capi && !capi.running) { capi = null; render(); } break;
-      case 'capi-del':
-        if (confirm(t('capiDelConfirm'))) { await invoke('delete_custom_api', { id: el.dataset.id }); status = await invoke<Status>('get_status'); render(); }
+      case 'capi-del': {
+        const c = s.customApis.find((x) => x.id === el.dataset.id);
+        if (c) { capiDel = { id: c.id, model: c.model }; render(); }
         break;
+      }
+      case 'capi-del-cancel': capiDel = null; render(); break;
+      case 'capi-del-ok': {
+        const d = capiDel;
+        capiDel = null;
+        if (!d) break;
+        try { await invoke('delete_custom_api', { id: d.id }); } catch (e) { toast(String(e).replace(/^Error:\s*/, ''), 'error'); }
+        status = await invoke<Status>('get_status').catch(() => status);
+        render();
+        break;
+      }
       case 'open-sheet': sheetOpen = true; render(); break;
       case 'close-sheet': if (updatePct === null) { sheetOpen = false; render(); } break;
       case 'install-update':
@@ -665,6 +687,7 @@ onStatus('status-changed', (s) => {
 
 installSelects();
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && capiDel) { capiDel = null; render(); return; }
   if (e.key === 'Escape' && capi && !capi.running) { capi = null; render(); return; }
   if (e.key === 'Escape' && sheetOpen && updatePct === null && !anySelectOpen()) { sheetOpen = false; render(); }
 });
@@ -703,6 +726,7 @@ onEvent<Overview>('activity', (o) => {
   if (q.has('mock') && q.get('feed') === 'raw') feedMode = 'raw';
   if (q.has('mock') && q.has('sheet')) sheetOpen = true;
   if (q.has('mock') && q.has('err')) seenErrAt = 0;
+  if (q.has('mock') && q.has('capidel')) { const c = status.customApis[0]; if (c) capiDel = { id: c.id, model: c.model }; }
   const cp = q.has('mock') ? q.get('capi') : null; // 预览：progress = 校验中途，fail = 失败态，edit = 编辑态
   if (cp) {
     const c = status.customApis[cp === 'edit' ? 0 : 1];
