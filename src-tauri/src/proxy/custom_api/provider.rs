@@ -32,6 +32,16 @@ pub(crate) fn rewrite_model(raw: &[u8], real_model: &str) -> Option<Vec<u8>> {
     serde_json::to_vec(&doc).ok()
 }
 
+/// 选条目用的模型名：优先解析后的 `body.model`（已应用 auto-review 等覆盖，路由也按它选的），
+/// 缺失时退回原始请求体里的 `model`。
+pub(crate) fn entry_model(body_model: Option<String>, raw: &[u8]) -> Option<String> {
+    body_model.or_else(|| {
+        serde_json::from_slice::<Value>(raw)
+            .ok()
+            .and_then(|v| v.get("model").and_then(Value::as_str).map(str::to_string))
+    })
+}
+
 /// 去掉入站凭证与订阅专用的 `oauth-*` beta，换上用户的 key。
 pub(crate) fn outbound_headers(incoming: &HeaderMap, entry: &CustomApi) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(incoming.len() + 1);
@@ -100,11 +110,7 @@ impl CustomApiProvider {
             );
         };
 
-        let raw_model = serde_json::from_slice::<Value>(&passthrough.raw_body)
-            .ok()
-            .and_then(|v| v.get("model").and_then(Value::as_str).map(str::to_string))
-            .or(body_model);
-        let Some(entry) = raw_model.as_deref().and_then(lookup) else {
+        let Some(entry) = entry_model(body_model, &passthrough.raw_body).as_deref().and_then(lookup) else {
             return json_error(
                 StatusCode::BAD_REQUEST,
                 "invalid_request_error",
@@ -247,6 +253,17 @@ mod tests {
         assert_eq!(out["model"], "claude-opus-5-5");
         assert_eq!(out["messages"][0]["content"], "hi");
         assert!(rewrite_model(b"not json", "claude-opus-5-5").is_none());
+    }
+
+    #[test]
+    fn entry_model_prefers_parsed_body() {
+        let raw = br#"{"model":"api-claude-opus-5-5"}"#;
+        assert_eq!(
+            entry_model(Some("api-claude-sonnet-5-5".into()), raw).as_deref(),
+            Some("api-claude-sonnet-5-5")
+        );
+        assert_eq!(entry_model(None, raw).as_deref(), Some("api-claude-opus-5-5"));
+        assert_eq!(entry_model(None, b"not json"), None);
     }
 
     #[test]
