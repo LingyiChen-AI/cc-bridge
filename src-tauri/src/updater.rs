@@ -1,5 +1,5 @@
 //! 自动更新：从 GitHub Release 的 latest.json 检查新版本（走客户端配置的对外代理）。
-//! 正式版启动 30 秒后检查一次，之后每 6 小时检查一次；发现新版本推给界面，并对每个新版本发一次系统通知。
+//! 正式版启动 30 秒后检查一次，之后每 30 分钟检查一次；发现新版本推给界面，并对每个新版本发一次系统通知。
 //! 安装前先撤销接管、停掉代理，保证 settings.json 不会残留指向已退出进程的地址。
 use std::sync::{
     Arc, Mutex,
@@ -16,7 +16,7 @@ use crate::controller::Controller;
 use crate::i18n::tr;
 
 const FIRST_CHECK: Duration = Duration::from_secs(30);
-const INTERVAL: Duration = Duration::from_secs(6 * 3600);
+const INTERVAL: Duration = Duration::from_secs(30 * 60);
 
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -24,6 +24,8 @@ pub struct UpdateInfo {
     pub version: String,
     pub current: String,
     pub notes: Option<String>,
+    /// 正在下载 / 安装（界面重开后用来恢复「下载中」状态）
+    pub installing: bool,
 }
 
 #[derive(Default)]
@@ -35,7 +37,9 @@ pub struct UpdaterState {
 
 impl UpdaterState {
     pub fn info(&self) -> Option<UpdateInfo> {
-        self.pending.lock().unwrap().as_ref().map(to_info)
+        let mut info = self.pending.lock().unwrap().as_ref().map(to_info)?;
+        info.installing = self.is_installing();
+        Some(info)
     }
 }
 
@@ -44,6 +48,7 @@ fn to_info(u: &Update) -> UpdateInfo {
         version: u.version.clone(),
         current: u.current_version.clone(),
         notes: u.body.clone().filter(|s| !s.trim().is_empty()),
+        installing: false,
     }
 }
 
@@ -95,26 +100,43 @@ fn notify_once(app: &AppHandle, info: &UpdateInfo) {
         .show();
 }
 
+/// 下载超时：安装包几 MB，慢网络下 30 秒不够
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+/// 正在安装时为 true；离开作用域（成功、出错、panic）一律复位，避免之后每次点击都返回 busy
+struct InstallingGuard(AppHandle);
+
+impl Drop for InstallingGuard {
+    fn drop(&mut self) {
+        self.0.state::<UpdaterState>().installing.store(false, Ordering::SeqCst);
+    }
+}
+
+impl UpdaterState {
+    pub fn is_installing(&self) -> bool {
+        self.installing.load(Ordering::SeqCst)
+    }
+}
+
 /// 下载并安装；进度通过 `update-progress`（0–100）推送。Windows 上安装程序启动后本进程会退出。
 pub async fn install(app: AppHandle) -> Result<(), String> {
-    let st = app.state::<UpdaterState>();
-    if st.installing.swap(true, Ordering::SeqCst) {
+    if app.state::<UpdaterState>().installing.swap(true, Ordering::SeqCst) {
         return Err("busy".into());
     }
-    let result = install_inner(&app).await;
-    st.installing.store(false, Ordering::SeqCst);
-    result
+    let _guard = InstallingGuard(app.clone());
+    install_inner(&app).await
 }
 
 async fn install_inner(app: &AppHandle) -> Result<(), String> {
     let pending = app.state::<UpdaterState>().pending.lock().unwrap().clone();
-    let update = match pending {
+    let mut update = match pending {
         Some(u) => u,
         None => {
             check(app).await?;
             app.state::<UpdaterState>().pending.lock().unwrap().clone().ok_or("upToDate")?
         }
     };
+    update.timeout = Some(DOWNLOAD_TIMEOUT);
     let mut got: u64 = 0;
     let mut last_pct = u64::MAX;
     let bytes = update
@@ -133,8 +155,11 @@ async fn install_inner(app: &AppHandle) -> Result<(), String> {
         )
         .await
         .map_err(|e| e.to_string())?;
-    // 先撤销接管、停代理，再交给安装程序
-    app.state::<Arc<Controller>>().shutdown();
+    // 先撤销接管、停代理，再交给安装程序。
+    // shutdown 里停代理用了 block_on，不能在异步任务里直接调用（会 panic：Cannot start a runtime from within a runtime），
+    // 放到阻塞线程池里执行。
+    let ctl = app.state::<Arc<Controller>>().inner().clone();
+    tauri::async_runtime::spawn_blocking(move || ctl.shutdown()).await.map_err(|e| e.to_string())?;
     update.install(bytes).map_err(|e| e.to_string())?;
     app.restart();
 }

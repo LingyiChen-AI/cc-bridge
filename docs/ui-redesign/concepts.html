@@ -1,0 +1,1132 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CC Bridge 界面方案</title>
+<style>
+/* ───────── 展示页外壳 ───────── */
+:root {
+  --page: #e9e7e4; --ink: #1c1917; --muted: #6b645c; --line: #d8d3cc; --brand: #d97757; --brand-d: #b4532f;
+  --sans: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  --mono: 'Cascadia Mono', 'JetBrains Mono', Consolas, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--page); color: var(--ink); font: 13px/1.5 var(--sans); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+.shell { display: grid; grid-template-columns: 300px 1fr; min-height: 100vh; }
+.side { padding: 24px 20px; border-right: 1px solid var(--line); background: #f3f1ee; display: flex; flex-direction: column; gap: 18px; }
+.side h1 { font-size: 17px; margin: 0; }
+.side .lead { color: var(--muted); font-size: 12.5px; margin: 4px 0 0; }
+.side h3 { font-size: 11px; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; font-weight: 600; }
+.pick { display: flex; flex-direction: column; gap: 6px; }
+.pick button { text-align: left; border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 10px 12px; }
+.pick button b { display: block; font-size: 13.5px; }
+.pick button span { color: var(--muted); font-size: 12px; }
+.pick button.on { border-color: var(--ink); box-shadow: 0 0 0 1px var(--ink); }
+.seg { display: flex; background: #e4e0db; border-radius: 9px; padding: 3px; }
+.seg button { flex: 1; border: 0; background: none; padding: 6px 0; border-radius: 7px; font-size: 12.5px; color: var(--muted); }
+.seg button.on { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 2px #0002; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chips button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 10px; font-size: 12px; }
+.chips button.on { background: var(--ink); color: #fff; border-color: var(--ink); }
+.idea { font-size: 12.5px; color: #3f3a35; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+.idea ul { margin: 6px 0 0; padding-left: 18px; }
+.idea li { margin: 3px 0; }
+.stage { display: flex; align-items: flex-start; justify-content: center; padding: 32px; overflow: auto; }
+
+/* 窗口外框（Windows 风格） */
+.win { width: 600px; height: 760px; background: #fff; border-radius: 10px; box-shadow: 0 30px 70px -20px #0005, 0 0 0 1px #0002; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+.titlebar { height: 32px; flex: none; display: flex; align-items: center; gap: 8px; padding-left: 12px; font-size: 12px; background: var(--tb, #f3f3f3); color: var(--tbt, #333); }
+.titlebar svg { width: 16px; height: 16px; }
+.titlebar .sp { flex: 1; }
+.titlebar i { width: 46px; height: 32px; display: grid; place-items: center; font-style: normal; opacity: .7; }
+.app { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+
+svg.i { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+.spin { width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; animation: spin .8s linear infinite; display: inline-block; flex: none; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } }
+@keyframes pop { 0% { transform: scale(.6); opacity: 0; } 70% { transform: scale(1.08); } }
+@keyframes slideIn { from { transform: translateX(24px); opacity: 0; } }
+@keyframes sheetUp { from { transform: translateY(100%); } }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.toast { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); z-index: 60; background: #1c1917; color: #fff; padding: 8px 14px; border-radius: 999px; font-size: 12.5px; display: flex; gap: 8px; align-items: center; box-shadow: 0 10px 30px -10px #0008; animation: fadeUp .18s; white-space: nowrap; }
+
+/* ═════════════ 方案 A：一键开关 ═════════════ */
+.A { --bg: #f5f4f2; --card: #fff; --line: #ebe7e2; --t1: #1c1917; --t2: #615a52; --t3: #9a928a; --acc: #d97757; --acc-d: #b4532f; --ok: #2f9e5b; --warn: #d9822b; --err: #d64545; background: var(--bg); color: var(--t1); }
+.A .hd { height: 56px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 20px; }
+.A .hd b { font-size: 15px; }
+.A .hd .sp { flex: 1; }
+.A .pill { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 0; font-size: 12px; font-weight: 600; }
+.A .pill.upd { background: #fdeee7; color: var(--acc-d); }
+.A .body { flex: 1; overflow: auto; padding: 4px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+.A .body > *, .B .content > * { flex-shrink: 0; }
+.A .card { background: var(--card); border-radius: 18px; padding: 16px; box-shadow: 0 1px 2px #0000000a; }
+.A .hero { text-align: center; padding: 26px 20px 20px; }
+.A .power { width: 120px; height: 120px; border-radius: 50%; border: 0; display: grid; place-items: center; margin: 0 auto; position: relative; transition: background .25s, box-shadow .25s; }
+.A .power svg { width: 46px; height: 46px; stroke-width: 2.4; }
+.A .power.on { background: radial-gradient(circle at 50% 35%, #3fbf73, #23894c); color: #fff; box-shadow: 0 0 0 10px #2f9e5b1f, 0 14px 30px -10px #23894c; }
+.A .power.off { background: #efece8; color: #9a928a; box-shadow: inset 0 2px 6px #0000000f; }
+.A .power.warn { background: radial-gradient(circle at 50% 35%, #f0a14a, #c9711f); color: #fff; box-shadow: 0 0 0 10px #d9822b22, 0 14px 30px -10px #c9711f; }
+.A .power.busy::after { content: ''; position: absolute; inset: -6px; border-radius: 50%; border: 3px solid transparent; border-top-color: var(--acc); animation: spin 1s linear infinite; }
+.A .hero h2 { margin: 18px 0 4px; font-size: 19px; }
+.A .hero p { margin: 0 auto; color: var(--t2); max-width: 400px; font-size: 13px; }
+.A .hero p code { font-family: var(--mono); background: #f3efea; padding: 1px 6px; border-radius: 5px; font-size: 12px; }
+.A .health { display: flex; justify-content: center; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+.A .hchip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; background: #f6f3ef; font-size: 12px; color: var(--t2); border: 0; }
+.A .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--t3); display: inline-block; flex: none; }
+.A .dot.ok { background: var(--ok); } .A .dot.warn { background: var(--warn); animation: pulse 1.6s infinite; } .A .dot.err { background: var(--err); animation: pulse 1.6s infinite; }
+.A .issue { display: flex; gap: 12px; align-items: flex-start; border-radius: 16px; padding: 14px 16px; background: #fff6ec; border: 1px solid #f6dcbc; animation: fadeUp .2s; }
+.A .issue.err { background: #fff1f1; border-color: #f5cdcd; }
+.A .issue svg { color: var(--warn); margin-top: 2px; }
+.A .issue.err svg { color: var(--err); }
+.A .issue b { display: block; }
+.A .issue .d { color: var(--t2); font-size: 12.5px; }
+.A .issue .acts { display: flex; gap: 8px; margin-top: 10px; }
+.A .sec-h { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.A .sec-h b { font-size: 14px; }
+.A .link { border: 0; background: none; color: var(--acc-d); font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; gap: 2px; padding: 0; }
+.A .mchips { display: flex; flex-wrap: wrap; gap: 8px; }
+.A .mchip { border: 1px solid var(--line); background: #fff; border-radius: 10px; padding: 7px 11px; font-family: var(--mono); font-size: 12px; display: inline-flex; align-items: center; gap: 6px; transition: all .15s; }
+.A .mchip.on { background: #1c1917; color: #fff; border-color: #1c1917; }
+.A .mchip .new { font-family: var(--sans); font-size: 10.5px; background: var(--acc); color: #fff; border-radius: 4px; padding: 0 4px; }
+.A .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.A .stat { background: #f8f6f3; border-radius: 12px; padding: 10px 12px; }
+.A .stat .k { font-size: 11.5px; color: var(--t3); }
+.A .stat .v { font-size: 18px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.A .tabs { height: 64px; flex: none; display: grid; grid-template-columns: repeat(4, 1fr); background: #fff; border-top: 1px solid var(--line); }
+.A .tabs button { border: 0; background: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; font-size: 11.5px; color: var(--t3); position: relative; }
+.A .tabs button svg { width: 20px; height: 20px; }
+.A .tabs button.on { color: var(--t1); font-weight: 600; }
+.A .tabs button.on svg { color: var(--acc); }
+.A .tabs .badge { position: absolute; top: 10px; left: calc(50% + 6px); width: 8px; height: 8px; border-radius: 50%; background: var(--err); }
+.A .btn { height: 34px; border-radius: 10px; border: 1px solid var(--line); background: #fff; padding: 0 14px; font-weight: 600; font-size: 12.5px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.A .btn.pri { background: var(--acc-d); border-color: var(--acc-d); color: #fff; }
+.A .btn.dark { background: #1c1917; border-color: #1c1917; color: #fff; }
+.A .btn.big { height: 46px; border-radius: 14px; font-size: 14.5px; width: 100%; }
+.A .btn:disabled { opacity: .4; cursor: not-allowed; }
+.A .search { display: flex; align-items: center; gap: 8px; background: #fff; border-radius: 12px; padding: 0 12px; height: 40px; border: 1px solid var(--line); }
+.A .search input { border: 0; outline: 0; flex: 1; background: none; }
+.A .quick { display: flex; gap: 6px; }
+.A .quick button { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 4px 11px; font-size: 12px; }
+.A .mtools { position: sticky; top: -4px; z-index: 5; background: var(--bg); margin: -4px -20px 0; padding: 4px 20px 10px; display: flex; flex-direction: column; gap: 10px; }
+.A .grp { background: #fff; border-radius: 16px; overflow: hidden; }
+.A .grp-h { cursor: pointer; user-select: none; }
+.A .grp-h .gl { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--t2); }
+.A .grp-h .gl svg { transition: transform .18s; }
+.A .grp.closed .grp-h .gl svg { transform: rotate(-90deg); }
+.A .grp-h .gr { display: inline-flex; align-items: center; gap: 10px; }
+.A .grp-h .all { border: 0; background: none; color: var(--acc-d); font-size: 12px; font-weight: 600; padding: 0; }
+.A .grp.closed .grp-h { background: #fff; }
+.A .grp .cnt { font-variant-numeric: tabular-nums; }
+.A .grp .cnt.has { color: var(--ok); font-weight: 600; }
+.A .grp-h { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px; font-size: 12px; color: var(--t3); background: #faf8f6; }
+.A .row { display: flex; align-items: center; gap: 10px; padding: 11px 14px; border-top: 1px solid #f2eee9; }
+.A .row:first-child { border-top: 0; }
+.A .row .name { flex: 1; font-family: var(--mono); font-size: 12.5px; }
+.A .row .meta { color: var(--t3); font-size: 11.5px; }
+.A .sw { width: 40px; height: 24px; border-radius: 999px; background: #ddd7d0; border: 0; position: relative; transition: background .18s; flex: none; padding: 0; }
+.A .sw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px #0003; transition: transform .2s cubic-bezier(.3,1.4,.5,1); }
+.A .sw.on { background: var(--ok); }
+.A .sw.on::after { transform: translateX(16px); }
+.A .feed { display: flex; flex-direction: column; gap: 8px; }
+.A .req { background: #fff; border-radius: 14px; padding: 11px 14px; display: flex; gap: 10px; align-items: center; animation: fadeUp .2s; }
+.A .req .route { font-size: 10.5px; padding: 1px 6px; border-radius: 5px; background: #eef6f0; color: #23894c; font-weight: 600; }
+.A .req .route.cl { background: #fbeee8; color: var(--acc-d); }
+.A .req .m { font-family: var(--mono); font-size: 12.5px; }
+.A .req .sub { font-size: 11.5px; color: var(--t3); }
+.A .req .st { margin-left: auto; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; }
+.A .req.bad { box-shadow: inset 3px 0 0 var(--err); }
+.A .req.bad .st { color: var(--err); }
+.A .logs { background: #1c1917; color: #d6d0c8; border-radius: 14px; padding: 12px 14px; font: 11.5px/1.7 var(--mono); white-space: pre-wrap; word-break: break-all; min-height: 360px; user-select: text; }
+.A .sgroup { background: #fff; border-radius: 16px; overflow: hidden; }
+.A .sgroup-t { font-size: 12px; color: var(--t3); margin: 4px 4px 6px; }
+.A .srow { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-top: 1px solid #f2eee9; min-height: 52px; }
+.A .srow:first-child { border-top: 0; }
+.A .srow .ic { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; background: #f6f1ec; color: var(--acc-d); flex: none; }
+.A .srow .lb { flex: 1; min-width: 0; }
+.A .srow .lb b { display: block; font-weight: 600; font-size: 13px; }
+.A .srow .lb span { color: var(--t3); font-size: 11.5px; }
+.A .srow input.v { border: 1px solid transparent; background: #f7f4f0; border-radius: 8px; height: 30px; padding: 0 9px; width: 190px; font-family: var(--mono); font-size: 12px; outline: none; }
+.A .srow input.v:focus { border-color: var(--acc); background: #fff; }
+.A .srow .res { font-size: 12px; display: inline-flex; gap: 4px; align-items: center; }
+.A .res.ok { color: var(--ok); } .A .res.err { color: var(--err); }
+.A .saved { font-size: 11.5px; color: var(--ok); display: inline-flex; align-items: center; gap: 4px; animation: fadeUp .2s; }
+.A .upcard { background: linear-gradient(135deg, #fff4ee, #fff); border: 1px solid #f6dccf; border-radius: 16px; padding: 14px 16px; }
+.A .bar { height: 6px; border-radius: 6px; background: #f1e6df; overflow: hidden; margin-top: 10px; }
+.A .bar i { display: block; height: 100%; background: var(--acc); border-radius: 6px; transition: width .2s; }
+.A .mask { position: absolute; inset: 0; background: #1c19174d; z-index: 40; animation: fadeUp .15s; }
+.A .sheet { position: absolute; left: 0; right: 0; bottom: 0; z-index: 41; background: #fff; border-radius: 22px 22px 0 0; padding: 10px 22px 22px; animation: sheetUp .25s cubic-bezier(.2,.8,.3,1); box-shadow: 0 -10px 40px -10px #0004; }
+.A .sheet .grab { width: 40px; height: 5px; border-radius: 5px; background: #e2ddd6; margin: 0 auto 14px; }
+.A .sheet h3 { margin: 0; font-size: 18px; }
+.A .sheet ul { margin: 10px 0 18px; padding-left: 18px; color: var(--t2); }
+.A .sheet li { margin: 4px 0; }
+/* A 引导 */
+.A .ob { flex: 1; overflow: auto; padding: 34px 40px 28px; display: flex; flex-direction: column; }
+.A .ob .logo-big { width: 64px; height: 64px; margin: 0 auto; display: block; }
+.A .ob h1 { text-align: center; font-size: 24px; margin: 16px 0 4px; letter-spacing: -.3px; }
+.A .ob .sub { text-align: center; color: var(--t2); margin: 0 0 24px; }
+.A .chk { display: flex; gap: 12px; align-items: flex-start; padding: 13px 16px; border-top: 1px solid #f2eee9; }
+.A .chk:first-child { border-top: 0; }
+.A .chk .st { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; margin-top: 1px; }
+.A .chk .st.ok { background: var(--ok); color: #fff; animation: pop .3s; }
+.A .chk .st.fail { background: var(--err); color: #fff; animation: pop .3s; }
+.A .chk .st.wait { border: 2px solid #e2ddd6; }
+.A .chk .st.run { color: var(--acc); }
+.A .chk .st svg { width: 13px; height: 13px; stroke-width: 3; }
+.A .chk b { display: block; font-weight: 600; }
+.A .chk .d { color: var(--t3); font-size: 12px; }
+.A .chk .fix { margin-top: 8px; display: flex; gap: 8px; animation: fadeUp .2s; }
+.A details.opt { margin-top: 12px; color: var(--t2); }
+.A details.opt summary { cursor: pointer; font-size: 12.5px; list-style: none; display: inline-flex; gap: 4px; align-items: center; }
+.A .ob .cta { margin-top: auto; padding-top: 18px; display: flex; flex-direction: column; gap: 8px; }
+.A .ob .skip { border: 0; background: none; color: var(--t3); font-size: 12.5px; }
+.A .done-ic { width: 76px; height: 76px; border-radius: 50%; background: var(--ok); color: #fff; display: grid; place-items: center; margin: 10px auto 0; animation: pop .4s; }
+.A .done-ic svg { width: 38px; height: 38px; stroke-width: 3; }
+.A .term { background: #1c1917; border-radius: 14px; padding: 14px 16px; font: 12.5px/1.75 var(--mono); color: #d6d0c8; margin-top: 18px; }
+.A .term .p { color: #8a837a; }
+.A .term .hl { color: #f2a07f; }
+.A .term .sel { background: #3a332c; color: #fff; border-radius: 4px; padding: 0 4px; margin: 0 -4px; }
+
+/* ═════════════ 方案 B：工作台 ═════════════ */
+.B { --bg: #fafafa; --card: #fff; --line: #ececec; --t1: #111; --t2: #555; --t3: #8e8e8e; --rail: #141414; --acc: #d97757; --acc-d: #b4532f; --ok: #16a34a; --warn: #d97706; --err: #dc2626; background: var(--bg); color: var(--t1); flex-direction: row !important; }
+.B .rail { width: 148px; flex: none; background: var(--rail); color: #a3a3a3; display: flex; flex-direction: column; padding: 16px 10px 12px; gap: 2px; }
+.B .rail .brand { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 650; font-size: 13.5px; padding: 0 6px 16px; }
+.B .rail .brand svg { width: 22px; height: 22px; }
+.B .nav { border: 0; background: none; color: inherit; display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 13px; text-align: left; position: relative; }
+.B .nav:hover { background: #ffffff0d; color: #e5e5e5; }
+.B .nav.on { background: #ffffff17; color: #fff; font-weight: 600; }
+.B .nav .n { margin-left: auto; font-size: 11px; background: var(--err); color: #fff; border-radius: 999px; padding: 0 6px; }
+.B .rail .sp { flex: 1; }
+.B .rstat { border-radius: 10px; background: #ffffff0d; padding: 10px; font-size: 11.5px; line-height: 1.6; }
+.B .rstat b { color: #fff; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.B .rver { border: 0; background: none; color: #8a8a8a; font-size: 11.5px; padding: 8px 4px 0; text-align: left; display: flex; align-items: center; gap: 6px; }
+.B .rver .up { color: #fff; background: var(--acc-d); border-radius: 999px; padding: 1px 7px; font-weight: 600; }
+.B .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; background: #777; flex: none; }
+.B .dot.ok { background: #22c55e; } .B .dot.warn { background: #f59e0b; animation: pulse 1.6s infinite; } .B .dot.err { background: #ef4444; animation: pulse 1.6s infinite; }
+.B .main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.B .ph { height: 54px; flex: none; display: flex; align-items: center; gap: 10px; padding: 0 20px; border-bottom: 1px solid var(--line); background: #fff; }
+.B .ph h2 { font-size: 15px; margin: 0; }
+.B .ph .sp { flex: 1; }
+.B .content { flex: 1; overflow: auto; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 14px; position: relative; }
+.B .tog { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--t2); }
+.B .sw { width: 34px; height: 20px; border-radius: 999px; background: #d4d4d4; border: 0; position: relative; padding: 0; transition: background .15s; flex: none; }
+.B .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s; box-shadow: 0 1px 2px #0003; }
+.B .sw.on { background: #111; }
+.B .sw.on::after { transform: translateX(14px); }
+.B .banner { display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 10px; border: 1px solid; font-size: 12.5px; animation: fadeUp .2s; }
+.B .banner.err { background: #fef2f2; border-color: #fbd5d5; }
+.B .banner.err svg { color: var(--err); }
+.B .banner.warn { background: #fffbeb; border-color: #fde7b0; }
+.B .banner.warn svg { color: var(--warn); }
+.B .banner.info { background: #fdf3ee; border-color: #f3d9cc; }
+.B .banner.info svg { color: var(--acc-d); }
+.B .banner .tx { flex: 1; min-width: 0; }
+.B .banner b { font-weight: 600; }
+.B .btn { height: 30px; border-radius: 7px; border: 1px solid var(--line); background: #fff; padding: 0 11px; font-size: 12.5px; font-weight: 500; display: inline-flex; align-items: center; justify-content: center; gap: 6px; white-space: nowrap; }
+.B .btn:hover { background: #f5f5f5; }
+.B .btn.pri { background: #111; color: #fff; border-color: #111; }
+.B .btn.acc { background: var(--acc-d); color: #fff; border-color: var(--acc-d); }
+.B .btn:disabled { opacity: .4; cursor: not-allowed; }
+.B .tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.B .tile { background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 12px; min-width: 0; }
+.B .tile .k { font-size: 11.5px; color: var(--t3); display: flex; align-items: center; gap: 6px; }
+.B .tile .v { font-size: 17px; font-weight: 650; margin-top: 6px; display: flex; align-items: center; gap: 6px; font-variant-numeric: tabular-nums; }
+.B .tile .s { font-size: 11.5px; color: var(--t3); margin-top: 2px; }
+.B .spark { display: flex; align-items: flex-end; gap: 2px; height: 26px; margin-top: 6px; }
+.B .spark i { flex: 1; background: #e7c3b4; border-radius: 1px; }
+.B .spark i.e { background: var(--err); }
+.B .panel { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.B .panel-h { display: flex; align-items: center; justify-content: space-between; padding: 10px 12px; font-size: 12.5px; font-weight: 600; border-bottom: 1px solid var(--line); }
+.B .panel-h .link { border: 0; background: none; color: var(--acc-d); font-size: 12px; padding: 0; }
+.B table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.B th { text-align: left; font-weight: 500; color: var(--t3); padding: 7px 12px; font-size: 11.5px; background: #fcfcfc; border-bottom: 1px solid var(--line); }
+.B td { padding: 8px 12px; border-bottom: 1px solid #f3f3f3; white-space: nowrap; }
+.B tr:last-child td { border-bottom: 0; }
+.B tbody tr { cursor: pointer; }
+.B tbody tr:hover td { background: #fafafa; }
+.B tr.sel td { background: #fdf3ee !important; }
+.B td.mono { font-family: var(--mono); }
+.B .code { font-variant-numeric: tabular-nums; font-weight: 600; }
+.B .code.ok { color: var(--ok); } .B .code.err { color: var(--err); }
+.B .tag { font-size: 10.5px; border-radius: 4px; padding: 1px 6px; font-weight: 600; }
+.B .tag.cx { background: #ecfdf3; color: #15803d; }
+.B .tag.cl { background: #fdf3ee; color: var(--acc-d); }
+.B .filters { display: flex; gap: 6px; align-items: center; }
+.B .fchip { border: 1px solid var(--line); background: #fff; border-radius: 999px; padding: 3px 10px; font-size: 12px; }
+.B .fchip.on { background: #111; color: #fff; border-color: #111; }
+.B .search { display: flex; align-items: center; gap: 6px; border: 1px solid var(--line); background: #fff; border-radius: 7px; padding: 0 9px; height: 30px; flex: 1; }
+.B .search input { border: 0; outline: 0; flex: 1; min-width: 0; font-size: 12.5px; }
+.B .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 300px; background: #fff; border-left: 1px solid var(--line); box-shadow: -16px 0 40px -20px #0004; z-index: 30; padding: 16px; animation: slideIn .2s; overflow: auto; }
+.B .drawer h3 { margin: 0 0 12px; font-size: 14px; display: flex; align-items: center; justify-content: space-between; }
+.B .kv { display: grid; grid-template-columns: 76px 1fr; gap: 6px 10px; font-size: 12px; }
+.B .kv span:nth-child(odd) { color: var(--t3); }
+.B .kv span:nth-child(even) { font-family: var(--mono); word-break: break-all; }
+.B .errbox { margin-top: 12px; background: #fef2f2; border: 1px solid #fbd5d5; border-radius: 8px; padding: 10px; font-size: 12px; }
+.B .mlist .row { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-bottom: 1px solid #f3f3f3; cursor: pointer; }
+.B .mlist .row:last-child { border-bottom: 0; }
+.B .mlist .row:hover { background: #fafafa; }
+.B .cb { width: 16px; height: 16px; border-radius: 4px; border: 1.5px solid #c8c8c8; display: grid; place-items: center; flex: none; background: #fff; }
+.B .cb.on { background: #111; border-color: #111; color: #fff; }
+.B .cb svg { width: 11px; height: 11px; stroke-width: 3.4; }
+.B .mlist .nm { flex: 1; font-family: var(--mono); font-size: 12.5px; }
+.B .mlist .use { font-size: 11px; color: var(--t3); font-variant-numeric: tabular-nums; }
+.B .new { font-size: 10.5px; color: var(--acc-d); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+.B .preview { background: #161616; color: #d4d4d4; border-radius: 10px; padding: 12px 14px; font: 12px/1.7 var(--mono); }
+.B .preview div, .A .term div { white-space: pre; }
+.B .preview .t { color: #8a8a8a; }
+.B .preview .grp { color: #6b6b6b; margin-top: 4px; }
+.B .preview .cx { color: #86efac; }
+.B .preview .cur { background: #2a2a2a; border-radius: 4px; margin: 0 -6px; padding: 0 6px; color: #fff; }
+.B .logs { background: #161616; color: #cfcfcf; border-radius: 10px; padding: 12px; font: 11.5px/1.7 var(--mono); white-space: pre-wrap; word-break: break-all; min-height: 420px; user-select: text; }
+.B .form { background: #fff; border: 1px solid var(--line); border-radius: 10px; }
+.B .fsec { padding: 14px 16px; border-bottom: 1px solid var(--line); display: grid; grid-template-columns: 116px 1fr; gap: 10px 14px; align-items: start; }
+.B .fsec:last-child { border-bottom: 0; }
+.B .fsec h4 { margin: 0; font-size: 12.5px; }
+.B .fsec h4 span { display: block; color: var(--t3); font-weight: 400; font-size: 11.5px; margin-top: 2px; }
+.B .fields { display: flex; flex-direction: column; gap: 10px; }
+.B .f label { display: block; font-size: 12px; color: var(--t2); margin-bottom: 4px; }
+.B .f .in { display: flex; gap: 6px; }
+.B .f input, .B .f select { height: 30px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; width: 100%; outline: none; background: #fff; font-size: 12.5px; }
+.B .f input.mono { font-family: var(--mono); font-size: 12px; }
+.B .f input:focus { border-color: #111; }
+.B .f .hint { font-size: 11.5px; color: var(--t3); margin-top: 4px; }
+.B .f .hint.ok { color: var(--ok); } .B .f .hint.err { color: var(--err); }
+.B .savebar { position: sticky; bottom: 0; margin: 0 -20px -20px; padding: 10px 20px; background: #111; color: #fff; display: flex; align-items: center; gap: 8px; animation: fadeUp .2s; font-size: 12.5px; }
+.B .savebar .sp { flex: 1; }
+.B .savebar .btn { height: 28px; }
+.B .savebar .btn.ghost { background: transparent; color: #ccc; border-color: #444; }
+.B .upd { border: 1px solid #f3d9cc; background: #fdf8f5; border-radius: 10px; padding: 12px; }
+.B .upd ul { margin: 6px 0 10px; padding-left: 18px; color: var(--t2); font-size: 12px; }
+.B .bar { height: 5px; border-radius: 5px; background: #f1e6df; overflow: hidden; margin-top: 8px; }
+.B .bar i { display: block; height: 100%; background: var(--acc-d); transition: width .2s; }
+/* B 引导 */
+.B .ob { display: flex; width: 100%; }
+.B .steps { width: 176px; flex: none; background: var(--rail); color: #8a8a8a; padding: 22px 16px; display: flex; flex-direction: column; gap: 4px; }
+.B .steps .brand { display: flex; align-items: center; gap: 8px; color: #fff; font-weight: 650; padding-bottom: 22px; }
+.B .steps .brand svg { width: 22px; height: 22px; }
+.B .stp { display: flex; gap: 10px; align-items: flex-start; padding: 8px 4px; font-size: 12.5px; }
+.B .stp .n { width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid #444; display: grid; place-items: center; font-size: 11px; flex: none; }
+.B .stp.on { color: #fff; }
+.B .stp.on .n { border-color: var(--acc); background: var(--acc); color: #fff; }
+.B .stp.done .n { border-color: #22c55e; background: #22c55e; color: #111; }
+.B .stp.done .n svg { width: 12px; height: 12px; stroke-width: 3.2; }
+.B .stp span { display: block; font-size: 11px; color: #666; }
+.B .obm { flex: 1; display: flex; flex-direction: column; padding: 28px 26px 20px; min-width: 0; overflow: auto; }
+.B .obm h2 { margin: 0; font-size: 20px; letter-spacing: -.2px; }
+.B .obm .lead { color: var(--t2); margin: 6px 0 18px; }
+.B .why { margin-top: 14px; background: #f5f5f4; border-radius: 8px; padding: 10px 12px; font-size: 12px; color: var(--t2); }
+.B .why b { color: var(--t1); }
+.B .chk { display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px; border-bottom: 1px solid #f3f3f3; }
+.B .chk:last-child { border-bottom: 0; }
+.B .chk .ic { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.B .chk .ic.ok { background: var(--ok); color: #fff; animation: pop .3s; }
+.B .chk .ic.fail { background: var(--err); color: #fff; }
+.B .chk .ic.wait { border: 1.5px solid #d4d4d4; }
+.B .chk .ic.run { color: var(--acc-d); }
+.B .chk .ic svg { width: 12px; height: 12px; stroke-width: 3.2; }
+.B .chk b { font-weight: 600; display: block; }
+.B .chk .d { font-size: 12px; color: var(--t3); font-family: var(--mono); }
+.B .radio { display: flex; flex-direction: column; gap: 8px; }
+.B .ropt { border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; gap: 10px; align-items: flex-start; background: #fff; text-align: left; }
+.B .ropt.on { border-color: #111; box-shadow: 0 0 0 1px #111; }
+.B .ropt .r { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #c8c8c8; flex: none; margin-top: 2px; }
+.B .ropt.on .r { border: 5px solid #111; }
+.B .ropt b { display: block; font-weight: 600; }
+.B .ropt span { font-size: 12px; color: var(--t3); }
+.B .ropt input { margin-top: 8px; height: 28px; border: 1px solid var(--line); border-radius: 6px; padding: 0 8px; font-family: var(--mono); font-size: 12px; width: 220px; }
+.B .obnav { margin-top: auto; padding-top: 18px; display: flex; gap: 8px; }
+.B .obnav .sp { flex: 1; }
+.B .testres { margin-top: 12px; border-radius: 8px; padding: 10px 12px; font-size: 12.5px; display: flex; gap: 8px; align-items: center; animation: fadeUp .2s; }
+.B .testres.ok { background: #ecfdf3; color: #15803d; }
+.B .testres.run { background: #f5f5f4; color: var(--t2); }
+
+/* ═════════════ 方案 C：托盘面板 ═════════════ */
+.desk { width: 600px; height: 760px; border-radius: 10px; overflow: hidden; position: relative; background: linear-gradient(160deg, #3b4a5e, #1d2633 55%, #2b2230); box-shadow: 0 30px 70px -20px #0005; }
+.desk::before { content: '桌面 · 点右下角托盘图标弹出面板'; position: absolute; left: 20px; top: 16px; color: #ffffff55; font-size: 12px; }
+.taskbar { position: absolute; left: 0; right: 0; bottom: 0; height: 44px; background: #1b1d22e6; backdrop-filter: blur(20px); display: flex; align-items: center; justify-content: flex-end; padding: 0 12px; gap: 14px; color: #ddd; font-size: 11.5px; }
+.taskbar .tray { width: 34px; height: 34px; border-radius: 6px; display: grid; place-items: center; border: 0; background: #ffffff1a; position: relative; }
+.taskbar .tray svg { width: 18px; height: 18px; }
+.taskbar .tray .d { position: absolute; right: 5px; bottom: 5px; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid #1b1d22; }
+.taskbar .clock { text-align: right; line-height: 1.25; }
+.C { --p: #1f1f22; --p2: #2a2a2e; --p3: #343439; --line: #ffffff14; --t1: #f4f4f5; --t2: #b4b4bb; --t3: #7c7c85; --acc: #e08a69; --acc-d: #d97757; --ok: #34d399; --warn: #fbbf24; --err: #f87171;
+  position: absolute; right: 10px; bottom: 54px; width: 380px; height: 580px; background: color-mix(in srgb, var(--p) 94%, transparent); backdrop-filter: blur(30px);
+  border-radius: 14px; border: 1px solid #ffffff1f; box-shadow: 0 24px 60px -10px #000a; color: var(--t1); overflow: hidden; display: flex; flex-direction: column; animation: fadeUp .22s; }
+.C .vw { flex: 1; min-height: 0; display: flex; flex-direction: column; animation: slideIn .18s; }
+.C .top { padding: 14px 14px 10px; display: flex; align-items: center; gap: 10px; }
+.C .top svg.lg { width: 30px; height: 30px; flex: none; }
+.C .top .tt { flex: 1; min-width: 0; }
+.C .top b { display: block; font-size: 14px; }
+.C .top .st { font-size: 12px; color: var(--t2); display: flex; align-items: center; gap: 6px; }
+.C .dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; background: var(--t3); }
+.C .dot.ok { background: var(--ok); } .C .dot.warn { background: var(--warn); animation: pulse 1.6s infinite; } .C .dot.err { background: var(--err); animation: pulse 1.6s infinite; }
+.C .bigsw { width: 52px; height: 30px; border-radius: 999px; border: 0; background: var(--p3); position: relative; padding: 0; transition: background .2s; flex: none; }
+.C .bigsw::after { content: ''; position: absolute; top: 3px; left: 3px; width: 24px; height: 24px; border-radius: 50%; background: #fff; transition: transform .22s cubic-bezier(.3,1.4,.5,1); }
+.C .bigsw.on { background: var(--acc-d); }
+.C .bigsw.on::after { transform: translateX(22px); }
+.C .cmd { margin: 0 12px; display: flex; align-items: center; gap: 8px; height: 38px; background: var(--p2); border: 1px solid var(--line); border-radius: 10px; padding: 0 10px; color: var(--t3); }
+.C .cmd:focus-within { border-color: var(--acc); }
+.C .cmd input { flex: 1; border: 0; outline: 0; background: none; color: var(--t1); min-width: 0; }
+.C .cmd kbd { font: 11px var(--sans); border: 1px solid #ffffff26; border-radius: 4px; padding: 0 5px; color: var(--t3); }
+.C .issue { margin: 10px 12px 0; padding: 10px 12px; border-radius: 10px; background: #f8717124; border: 1px solid #f871714d; font-size: 12.5px; display: flex; gap: 10px; align-items: flex-start; animation: fadeUp .2s; }
+.C .issue.warn { background: #fbbf2420; border-color: #fbbf2447; }
+.C .issue svg { color: var(--err); margin-top: 2px; }
+.C .issue.warn svg { color: var(--warn); }
+.C .issue .tx { flex: 1; }
+.C .issue .tx span { color: var(--t2); font-size: 12px; display: block; }
+.C .issue .acts { display: flex; gap: 6px; margin-top: 8px; }
+.C .sh { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; font-size: 11.5px; color: var(--t3); letter-spacing: .02em; }
+.C .sh button { border: 0; background: none; color: var(--acc); font-size: 12px; padding: 0; }
+.C .list { flex: 1; overflow: auto; padding: 0 8px; }
+.C .it { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; font-size: 12.5px; }
+.C .it:hover, .C .it.cur { background: var(--p2); }
+.C .it .nm { flex: 1; font-family: var(--mono); font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.C .it .ic { width: 26px; height: 26px; border-radius: 7px; background: var(--p3); display: grid; place-items: center; color: var(--t2); flex: none; }
+.C .it .ic svg { width: 14px; height: 14px; }
+.C .it .rm { border: 0; background: none; color: var(--t3); opacity: 0; padding: 2px; }
+.C .it:hover .rm { opacity: 1; }
+.C .it .k { font-size: 11px; color: var(--t3); }
+.C .it .chk { width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid #ffffff33; display: grid; place-items: center; flex: none; }
+.C .it .chk.on { background: var(--acc-d); border-color: var(--acc-d); }
+.C .it .chk svg { width: 10px; height: 10px; stroke-width: 3.6; }
+.C .new { font-size: 10px; color: var(--acc); border: 1px solid currentColor; border-radius: 4px; padding: 0 4px; }
+.C .grp-t { font-size: 11px; color: var(--t3); padding: 8px 10px 4px; }
+.C .foot { height: 46px; flex: none; border-top: 1px solid var(--line); display: flex; align-items: center; padding: 0 8px; gap: 2px; }
+.C .foot .fb { border: 0; background: none; color: var(--t2); height: 32px; padding: 0 10px; border-radius: 8px; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.C .foot .fb:hover { background: var(--p2); color: var(--t1); }
+.C .foot .fb.up { color: var(--acc); }
+.C .foot .sp { flex: 1; }
+.C .stack-h { display: flex; align-items: center; gap: 6px; padding: 12px 10px 8px; }
+.C .stack-h button.back { border: 0; background: none; color: var(--t2); height: 30px; width: 30px; border-radius: 8px; display: grid; place-items: center; }
+.C .stack-h button.back:hover { background: var(--p2); }
+.C .stack-h b { font-size: 14px; flex: 1; }
+.C .pad { padding: 0 14px 14px; overflow: auto; flex: 1; }
+.C .logs { background: #141416; border: 1px solid var(--line); border-radius: 10px; padding: 10px; font: 11px/1.7 var(--mono); color: #c4c4cc; white-space: pre-wrap; word-break: break-all; user-select: text; }
+.C .btn { height: 30px; border-radius: 8px; border: 1px solid #ffffff1f; background: var(--p2); color: var(--t1); padding: 0 12px; font-size: 12.5px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
+.C .btn.pri { background: var(--acc-d); border-color: var(--acc-d); color: #fff; font-weight: 600; }
+.C .btn.big { height: 44px; width: 100%; border-radius: 12px; font-size: 14px; }
+.C .btn:disabled { opacity: .4; cursor: not-allowed; }
+.C .sl { background: var(--p2); border-radius: 12px; overflow: hidden; border: 1px solid var(--line); }
+.C .sr { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-top: 1px solid var(--line); font-size: 12.5px; }
+.C .sr:first-child { border-top: 0; }
+.C .sr .lb { flex: 1; }
+.C .sr .lb span { display: block; color: var(--t3); font-size: 11.5px; }
+.C .sr input { width: 170px; height: 28px; background: #18181b; border: 1px solid var(--line); border-radius: 7px; color: var(--t1); padding: 0 8px; font: 12px var(--mono); outline: none; }
+.C .sr input:focus { border-color: var(--acc); }
+.C .sw { width: 34px; height: 20px; border-radius: 999px; background: var(--p3); border: 0; position: relative; padding: 0; transition: background .15s; }
+.C .sw::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s; }
+.C .sw.on { background: var(--acc-d); }
+.C .sw.on::after { transform: translateX(14px); }
+.C .stitle { font-size: 11.5px; color: var(--t3); margin: 14px 4px 6px; }
+.C .bar { height: 5px; border-radius: 5px; background: var(--p3); overflow: hidden; margin-top: 12px; }
+.C .bar i { display: block; height: 100%; background: var(--acc); transition: width .2s; }
+.C .uv h3 { font-size: 22px; margin: 6px 0 2px; }
+.C .uv ul { color: var(--t2); padding-left: 18px; margin: 12px 0 18px; }
+.C .uv li { margin: 4px 0; }
+/* C 引导：一次一问 */
+.C .ob { flex: 1; display: flex; flex-direction: column; padding: 18px 18px 16px; animation: slideIn .22s; }
+.C .ob .dots { display: flex; gap: 5px; }
+.C .ob .dots i { height: 4px; flex: 1; border-radius: 4px; background: var(--p3); }
+.C .ob .dots i.on { background: var(--acc); }
+.C .ob .q { font-size: 21px; font-weight: 650; line-height: 1.35; margin: 26px 0 6px; letter-spacing: -.2px; }
+.C .ob .qs { color: var(--t2); font-size: 12.5px; margin: 0 0 18px; }
+.C .ans { display: flex; flex-direction: column; gap: 8px; }
+.C .ans button { text-align: left; border: 1px solid var(--line); background: var(--p2); border-radius: 12px; padding: 12px 14px; display: flex; gap: 12px; align-items: center; color: var(--t1); transition: border-color .12s, transform .12s; }
+.C .ans button:hover { border-color: var(--acc); transform: translateX(2px); }
+.C .ans button b { display: block; font-size: 13.5px; }
+.C .ans button span { color: var(--t3); font-size: 12px; }
+.C .ans button .ai { width: 32px; height: 32px; border-radius: 9px; background: var(--p3); display: grid; place-items: center; flex: none; color: var(--acc); }
+.C .ans button .rec { margin-left: auto; font-size: 10.5px; background: var(--acc-d); color: #fff; border-radius: 4px; padding: 1px 6px; }
+.C .ob .chks { display: flex; flex-direction: column; gap: 4px; }
+.C .ob .ck { display: flex; gap: 10px; align-items: center; padding: 9px 4px; font-size: 13px; }
+.C .ob .ck .ci { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; flex: none; }
+.C .ob .ck .ci.ok { background: var(--ok); color: #111; animation: pop .3s; }
+.C .ob .ck .ci.fail { background: var(--err); color: #111; }
+.C .ob .ck .ci.wait { border: 1.5px solid #ffffff33; }
+.C .ob .ck .ci.run { color: var(--acc); }
+.C .ob .ck .ci svg { width: 12px; height: 12px; stroke-width: 3.4; }
+.C .ob .ck .d { margin-left: auto; color: var(--t3); font-size: 11.5px; font-family: var(--mono); }
+.C .ob .bottom { margin-top: auto; display: flex; flex-direction: column; gap: 8px; }
+.C .ob .ghost { border: 0; background: none; color: var(--t3); font-size: 12.5px; padding: 6px; }
+.C .ob .hint { font-size: 12px; color: var(--t2); background: var(--p2); border-radius: 10px; padding: 10px 12px; margin-top: 12px; display: flex; gap: 8px; align-items: center; animation: fadeUp .2s; }
+.C .ob .hint.ok { color: var(--ok); }
+.C .celebrate { width: 70px; height: 70px; border-radius: 20px; background: var(--acc-d); display: grid; place-items: center; margin-top: 30px; animation: pop .4s; }
+.C .celebrate svg { width: 36px; height: 36px; color: #fff; stroke-width: 3; }
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="side">
+    <div>
+      <h1>CC Bridge 界面方案</h1>
+      <p class="lead">三套方案的信息结构、交互方式和首次引导都不同。右侧窗口可以直接点击操作，所有数据都是模拟的。</p>
+    </div>
+    <div>
+      <h3>方案</h3>
+      <div class="pick" id="pick"></div>
+    </div>
+    <div>
+      <h3>看哪一部分</h3>
+      <div class="seg" id="view"></div>
+    </div>
+    <div>
+      <h3>模拟状态</h3>
+      <div class="chips" id="scen"></div>
+    </div>
+    <div class="idea" id="idea"></div>
+  </aside>
+  <main class="stage" id="stage"></main>
+</div>
+
+<script>
+// ───────── 图标 ─────────
+const P = {
+  power: '<path d="M12 2v10"/><path d="M18.4 6.6a9 9 0 1 1-12.77.04"/>',
+  home: '<path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z"/>',
+  layers: '<path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5"/><path d="m3 17 9 5 9-5"/>',
+  activity: '<path d="M22 12h-4l-3 9L9 3l-3 9H2"/>',
+  gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>',
+  search: '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  refresh: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  copy: '<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  x: '<path d="M18 6 6 18M6 6l12 12"/>',
+  alert: '<path d="M12 9v4M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/>',
+  left: '<path d="m15 18-6-6 6-6"/>',
+  right: '<path d="m9 18 6-6-6-6"/>',
+  arrowR: '<path d="M5 12h14M13 6l6 6-6 6"/>',
+  download: '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>',
+  terminal: '<path d="m4 17 6-5-6-5"/><path d="M12 19h8"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>',
+  user: '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+  server: '<rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/>',
+  file: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/>',
+  plus: '<path d="M12 5v14M5 12h14"/>',
+  log: '<path d="M4 6h16M4 12h16M4 18h10"/>',
+  logout: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/>',
+  send: '<path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4z"/>',
+  chevD: '<path d="m6 9 6 6 6-6"/>',
+  zap: '<path d="M13 2 3 14h9l-1 8 10-12h-9z"/>',
+  boot: '<path d="M12 2v4M12 18v4M4.9 4.9l2.8 2.8M16.3 16.3l2.8 2.8M2 12h4M18 12h4"/>',
+  lang: '<path d="M4 5h8M8 3v2M5 9c1.5 3 4 5 7 6M11 5c-1 4-3 7-7 9"/><path d="m13 21 4-9 4 9M14.5 18h5"/>',
+  folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+  wifiOff: '<path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0M5 13a10 10 0 0 1 5.2-2.8M19 13a10 10 0 0 0-2.3-1.6M2 8.8a15 15 0 0 1 4.2-2.7M22 8.8A15 15 0 0 0 10.7 5"/><path d="M12 20h.01"/>',
+  edit: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>',
+};
+const ic = (n, s = 16) => `<svg class="i" viewBox="0 0 24 24" style="width:${s}px;height:${s}px">${P[n]}</svg>`;
+const LOGO = `<svg viewBox="0 0 100 100" aria-hidden="true"><rect x="4" y="4" width="92" height="92" rx="22" fill="#141414"/><path d="M22 30 L42 50 L22 70" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><path d="M48 30 L68 50 L48 70" fill="none" stroke="#D97757" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><rect x="72" y="62" width="10" height="8" rx="3" fill="#D97757"/></svg>`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ───────── 模拟数据 ─────────
+const MODELS = [
+  { id: 'gpt-6.2-sol', fam: 'GPT-6.2', use: 86, latest: true }, { id: 'gpt-6.2-sol-fast', fam: 'GPT-6.2', use: 31 }, { id: 'gpt-6.2-astra', fam: 'GPT-6.2', use: 12 },
+  { id: 'gpt-6.1-sol', fam: 'GPT-6.1', use: 54 }, { id: 'gpt-6.1-sol-fast', fam: 'GPT-6.1', use: 9 }, { id: 'gpt-6.1-terra', fam: 'GPT-6.1', use: 4 },
+  { id: 'gpt-6-astra', fam: 'GPT-6', use: 2 }, { id: 'gpt-6-sol', fam: 'GPT-6', use: 0 }, { id: 'gpt-6-luna', fam: 'GPT-6', use: 0 },
+  { id: 'gpt-5.6-sol', fam: 'GPT-5.x', use: 0 }, { id: 'gpt-5.5', fam: 'GPT-5.x', use: 0 }, { id: 'gpt-5.4-mini', fam: 'GPT-5.x', use: 0 },
+];
+const DEFAULT_SEL = MODELS.slice(0, 6).map((m) => m.id);
+const REQS = [
+  { t: '10:24:18', m: 'gpt-6.2-sol', r: 'cx', s: 200, ms: 1840, tin: 12840, tout: 412 },
+  { t: '10:24:02', m: 'claude-opus-5-5', r: 'cl', s: 200, ms: 948, tin: 9020, tout: 233 },
+  { t: '10:23:41', m: 'gpt-6.2-sol', r: 'cx', s: 429, ms: 604, tin: 11200, tout: 0, err: '额度暂时用完（ChatGPT 每 5 小时限额），约 18 分钟后恢复' },
+  { t: '10:22:57', m: 'gpt-6.2-sol-fast', r: 'cx', s: 200, ms: 1210, tin: 8800, tout: 1290 },
+  { t: '10:21:30', m: 'claude-opus-5-5', r: 'cl', s: 200, ms: 1057, tin: 7410, tout: 96 },
+  { t: '10:20:12', m: 'gpt-6.1-sol', r: 'cx', s: 200, ms: 2630, tin: 15320, tout: 2210 },
+  { t: '10:19:48', m: 'gpt-6.2-sol', r: 'cx', s: 200, ms: 1702, tin: 14010, tout: 388 },
+];
+const LOGS = `[cc-bridge] 代理已启动 pid=27632 端口 18765
+{"level":"info","msg":"server listening","fields":{"port":18765}}
+{"level":"info","msg":"request_completed","fields":{"model":"gpt-6.2-sol","status":200,"ms":1840}}
+{"level":"info","msg":"request_completed","fields":{"model":"claude-opus-5-5","provider":"anthropic","status":200,"ms":948}}
+{"level":"warn","msg":"request_failed","fields":{"model":"gpt-6.2-sol","status":429,"message":"usage limit reached"}}
+{"level":"info","msg":"request_completed","fields":{"model":"gpt-6.2-sol-fast","status":200,"ms":1210}}`;
+const UPDATE = { version: '0.1.4', notes: ['设置改成右上角入口，弹窗里可以直接更新', '修复点「立即更新」后一直提示 busy 的问题', '下载超时放宽到 10 分钟，慢网络也能更新'] };
+
+const CONCEPTS = {
+  A: { name: 'A · 一键开关', sub: '一个大开关 + 底部标签栏，偏移动端的轻量感',
+    idea: `<b>思路：大多数时候只需要「开 / 关」。</b><ul>
+      <li>主页正中是一个大开关，状态一眼就能看懂；出问题时开关变成橙色，下面直接给出「怎么修」的按钮</li>
+      <li>底部 4 个标签：主页、模型、动态、设置；设置是单独一页，不再用弹窗</li>
+      <li>设置改完自动保存、立即生效，没有「保存」按钮</li>
+      <li>有新版本时右上角出现提示，点开从底部弹出说明和进度条</li>
+      <li>首次引导只有一页：自动检测 → 一键接管，有问题就在出问题的那一行里修</li></ul>` },
+  B: { name: 'B · 工作台', sub: '左侧导航 + 请求明细，像桌面开发者工具',
+    idea: `<b>思路：把「代理到底在干什么」摊开给你看。</b><ul>
+      <li>左侧导航：概览、模型、请求、设置；左下角固定显示运行状态和版本</li>
+      <li>概览里有今天的请求量、错误数，以及最近请求列表</li>
+      <li>请求页逐条列出每次调用：走的是 Codex 还是 Claude 订阅、耗时、token；点一行看详情和报错原因</li>
+      <li>模型页能实时预览 Claude Code 里 <code>/model</code> 会显示成什么样</li>
+      <li>设置是表单，改动后底部出现「保存并重启代理」；首次引导是 4 步分步向导，每步都写了为什么需要</li></ul>` },
+  C: { name: 'C · 托盘面板', sub: '点托盘图标弹出小面板，Ctrl K 搜索',
+    idea: `<b>思路：它是个后台工具，平时不需要大窗口。</b><ul>
+      <li>点任务栏托盘图标，从右下角弹出一个 380×580 的小面板；点面板外面就收起</li>
+      <li>顶部一个开关，下面列出已启用的模型；搜索框能搜模型（回车启用 / 停用），也能搜操作（重启代理、复制日志、检查更新）</li>
+      <li>日志、设置、更新都在面板里切换页面，左上角有返回，不另开窗口</li>
+      <li>首次引导一次只问一个问题，点选答案就进入下一步，基本不用打字</li></ul>` },
+};
+const SCEN = [
+  ['normal', '一切正常'], ['off', '未接管'], ['expired', 'Codex 登录过期'], ['conflict', '端口被占用'], ['update', '有新版本'],
+];
+
+// ───────── 状态 ─────────
+const S = {
+  concept: 'A', view: 'main', scen: 'normal',
+  takeover: true, codex: 'ok', proxy: 'running', update: null, upd: null, checkUpd: null, updated: false,
+  sel: new Set(DEFAULT_SEL), q: '', collapsed: new Set(['GPT-6', 'GPT-5.x']), tabA: 'home', feedA: 'req', tabB: 'overview', reqFilter: 'all', drawer: null, rawB: false,
+  viewC: 'home', cur: 0,
+  cfg: { proxy: 'http://127.0.0.1:7890', port: '18765', autostart: true, lang: '跟随系统', codexDir: '', claudeDir: '' },
+  draft: null, savedAt: null, net: null, toast: null,
+  ob: null,
+};
+const T = [];
+function later(ms, fn) { T.push(setTimeout(() => { fn(); render(); }, ms)); }
+function clearTimers() { while (T.length) clearTimeout(T.pop()); if (S._iv) { clearInterval(S._iv); S._iv = null; } }
+function toast(msg, spin) { S.toast = { msg, spin }; const id = Math.random(); S.toast.id = id; later(1800, () => { if (S.toast?.id === id) S.toast = null; }); }
+
+function applyScen(k) {
+  clearTimers();
+  S.scen = k; S.takeover = k !== 'off'; S.codex = k === 'expired' ? 'expired' : 'ok'; S.proxy = k === 'conflict' ? 'conflict' : 'running';
+  S.update = k === 'update' ? UPDATE : null; S.upd = null; S.checkUpd = null; S.drawer = null; S.toast = null;
+  if (S.view === 'ob') startOb();
+}
+
+function issues() {
+  const out = [];
+  if (S.proxy === 'conflict') out.push({ id: 'port', lv: 'err', t: '端口 18765 被占用，代理没能启动', d: '占用它的是 node.exe（PID 4412）。可以结束它，或者换一个端口。', acts: [['kill', '结束它并启动'], ['port', '换个端口']] });
+  if (S.codex === 'expired') out.push({ id: 'login', lv: 'warn', t: 'Codex 登录已过期', d: '现在选 Codex 模型会报 401。重新登录后自动恢复，不用重启。', acts: [['login', '重新登录']] });
+  return out;
+}
+function overall() {
+  if (S.proxy === 'conflict') return ['err', '代理未运行'];
+  if (S.proxy === 'starting') return ['warn', '正在启动'];
+  if (S.codex === 'expired') return ['warn', '需要重新登录'];
+  return ['ok', S.takeover ? '运行中 · 已接管' : '运行中 · 未接管'];
+}
+
+// 通用动作
+function fixAction(a) {
+  if (a === 'login') { toast('已打开 codex login 窗口，登录完成后自动恢复', true); later(1600, () => { S.codex = 'ok'; toast('Codex 已重新登录'); }); }
+  if (a === 'kill') { S.proxy = 'starting'; later(1200, () => { S.proxy = 'running'; toast('已结束 node.exe，代理已启动'); }); }
+  if (a === 'port') { S.cfg.port = '18767'; S.proxy = 'starting'; later(1000, () => { S.proxy = 'running'; toast('已换到端口 18767 并重新接管'); }); }
+}
+function startUpdate() {
+  S.upd = 0;
+  S._iv = setInterval(() => {
+    S.upd = Math.min(100, (S.upd | 0) + 7 + Math.round(Math.random() * 6));
+    if (S.upd >= 100) { clearInterval(S._iv); S._iv = null; S.upd = 'restart'; later(1600, () => { S.update = null; S.upd = null; S.aSheet = false; S.updated = true; S.viewC = S.viewC === 'update' ? 'home' : S.viewC; toast('已更新到 0.1.4，接管已恢复'); }); }
+    render();
+  }, 160);
+}
+function checkUpdate() {
+  S.checkUpd = 'checking';
+  later(1100, () => { S.checkUpd = null; if (S.updated) toast('已经是最新版本'); else S.update = UPDATE; });
+}
+function testNet(cb) {
+  S.net = 'run';
+  later(900, () => { S.net = S.cfg.proxy.trim() ? { ok: true, ms: 286 } : { ok: false, msg: '连不上 api.openai.com（直连超时）' }; cb && cb(); });
+}
+function toggleModel(id) { S.sel.has(id) ? S.sel.delete(id) : S.sel.add(id); }
+
+// ───────── 首次引导（三套共用的检测逻辑）─────────
+function startOb() {
+  clearTimers();
+  S.ob = { step: 0, checks: { cli: 'wait', login: 'wait', net: 'wait', cfg: 'wait' }, done: false, netChoice: 'detected', netCustom: '', test: null, takeover: true, autostart: true, sel: new Set(DEFAULT_SEL) };
+  runChecks();
+}
+function runChecks() {
+  const keys = ['cli', 'login', 'net', 'cfg'];
+  keys.forEach((k, i) => {
+    later(350 + i * 550, () => { S.ob.checks[k] = 'run'; });
+    later(750 + i * 550, () => { S.ob.checks[k] = k === 'login' && S.codex === 'expired' ? 'fail' : 'ok'; });
+  });
+}
+const CHECK_INFO = {
+  cli: ['Codex CLI', '已安装 · v0.167.0', '没找到 codex 命令'],
+  login: ['ChatGPT 账号', 'Plus · 有效期到 11-27', '登录已过期，需要重新登录'],
+  net: ['访问 OpenAI', '走系统代理 127.0.0.1:7890 · 286ms', '连不上'],
+  cfg: ['Claude Code 配置', '~/.claude/settings.json 可写', '没有写入权限'],
+};
+const allOk = () => S.ob && Object.values(S.ob.checks).every((v) => v === 'ok');
+function obFix(k) { if (k === 'login') { S.ob.checks.login = 'run'; toast('已打开登录窗口', true); later(1500, () => { S.ob.checks.login = 'ok'; S.codex = 'ok'; toast('登录成功'); }); } }
+
+// ═════════════ 方案 A ═════════════
+function renderA() {
+  if (S.view === 'ob') return renderAob();
+  const [tone] = overall();
+  const iss = issues();
+  const upPill = S.update ? `<button class="pill upd" data-a="a-upd">${ic('download', 13)} 新版本 ${S.update.version}</button>` : '';
+  let body = '';
+  if (S.tabA === 'home') {
+    const pw = S.proxy === 'starting' ? 'warn busy' : tone !== 'ok' ? 'warn' : S.takeover ? 'on' : 'off';
+    const n = S.sel.size;
+    const h2 = tone === 'err' ? '代理没有运行' : tone === 'warn' ? (S.proxy === 'starting' ? '正在启动…' : '需要处理一个问题') : S.takeover ? 'Claude Code 已接入 Codex' : '还没有接管 Claude Code';
+    const p = tone !== 'ok' ? '处理完下面的问题就能恢复，不用重启 Claude Code。'
+      : S.takeover ? `新开的 Claude Code 窗口里输入 <code>/model</code>，就能选到这 ${n} 个 Codex 模型；Claude 模型照常走你自己的订阅。`
+      : '打开后，Claude Code 的 <code>/model</code> 里会多出 Codex 模型。关掉客户端时会自动恢复原来的配置。';
+    body = `
+      <div class="card hero">
+        <button class="power ${pw}" data-a="a-power" aria-label="接管开关">${ic('power', 46)}</button>
+        <h2>${h2}</h2><p>${p}</p>
+        <div class="health">
+          <span class="hchip"><span class="dot ${S.codex === 'ok' ? 'ok' : 'warn'}"></span>Codex 账号 · ${S.codex === 'ok' ? '有效至 11-27' : '已过期'}</span>
+          <span class="hchip"><span class="dot ${S.proxy === 'running' ? 'ok' : S.proxy === 'starting' ? 'warn' : 'err'}"></span>本机代理 · ${S.proxy === 'running' ? ':' + S.cfg.port : S.proxy === 'starting' ? '启动中' : '未运行'}</span>
+          <span class="hchip"><span class="dot ${S.takeover ? 'ok' : ''}"></span>Claude 配置 · ${S.takeover ? '已写入' : '原样'}</span>
+        </div>
+      </div>
+      ${iss.map((x) => `<div class="issue ${x.lv}">${ic('alert', 18)}<div style="flex:1"><b>${x.t}</b><div class="d">${x.d}</div>
+        <div class="acts">${x.acts.map(([a, l], i) => `<button class="btn ${i === 0 ? 'dark' : ''}" data-a="fix" data-v="${a}">${l}</button>`).join('')}</div></div></div>`).join('')}
+      <div class="card">
+        <div class="sec-h"><b>常用模型 <span style="color:var(--t3);font-weight:400;font-size:12px">点一下启用 / 停用</span></b><button class="link" data-a="a-tab" data-v="models">全部 ${MODELS.length} 个 ${ic('right', 14)}</button></div>
+        <div class="mchips">${MODELS.slice(0, 8).map((m) => `<button class="mchip ${S.sel.has(m.id) ? 'on' : ''}" data-a="model" data-v="${m.id}">${S.sel.has(m.id) ? ic('check', 12) : ''}${m.id}${m.latest ? '<span class="new">新</span>' : ''}</button>`).join('')}</div>
+      </div>
+      <div class="card">
+        <div class="sec-h"><b>今天</b><button class="link" data-a="a-tab" data-v="feed">查看动态 ${ic('right', 14)}</button></div>
+        <div class="stats"><div class="stat"><div class="k">请求</div><div class="v">128</div></div><div class="stat"><div class="k">平均耗时</div><div class="v">1.9s</div></div><div class="stat"><div class="k">出错</div><div class="v" style="color:var(--err)">1</div></div></div>
+      </div>`;
+  } else if (S.tabA === 'models') {
+    const q = S.q.toLowerCase();
+    const fams = [...new Set(MODELS.map((m) => m.fam))];
+    body = `
+      <div class="mtools">
+        <div class="search">${ic('search')}<input data-in="q" placeholder="搜索模型" value="${esc(S.q)}"></div>
+        <div class="quick"><button data-a="m-def">推荐（最新 6 个）</button><button data-a="m-all">全选</button><button data-a="m-none">清空</button><span style="margin-left:auto;color:var(--t3);font-size:12px;align-self:center">已选 ${S.sel.size} / ${MODELS.length}</span></div>
+      </div>
+      ${fams.map((f) => { const ms = MODELS.filter((m) => m.fam === f && m.id.includes(q)); if (!ms.length) return '';
+        const on = ms.filter((m) => S.sel.has(m.id)).length;
+        const closed = !q && S.collapsed.has(f);
+        return `<div class="grp ${closed ? 'closed' : ''}"><div class="grp-h" data-a="m-fold" data-v="${f}"><span class="gl">${ic('chevD', 14)}${f}</span>
+            <span class="gr"><span class="cnt ${on ? 'has' : ''}">${on}/${ms.length}</span><button class="all" data-a="m-grp" data-v="${f}">${on === ms.length ? '全关' : '全开'}</button></span></div>
+          ${closed ? '' : ms.map((m) => `<div class="row"><span class="name">${m.id}</span>${m.latest ? '<span class="pill upd" style="height:20px;padding:0 6px;font-size:10.5px">最新</span>' : ''}<span class="meta">${m.use ? `近 7 天 ${m.use} 次` : '没用过'}</span><button class="sw ${S.sel.has(m.id) ? 'on' : ''}" data-a="model" data-v="${m.id}" aria-label="${m.id}"></button></div>`).join('')}</div>`; }).join('')}
+      <div style="text-align:center;color:var(--t3);font-size:12px">改动立即生效，对新开的 Claude Code 窗口起作用</div>`;
+  } else if (S.tabA === 'feed') {
+    body = `
+      <div class="seg" style="background:#ebe6e0"><button class="${S.feedA === 'req' ? 'on' : ''}" data-a="a-feed" data-v="req">请求</button><button class="${S.feedA === 'raw' ? 'on' : ''}" data-a="a-feed" data-v="raw">原始日志</button></div>
+      ${S.feedA === 'req' ? `<div class="feed">${REQS.map((r) => `<div class="req ${r.s >= 400 ? 'bad' : ''}">
+          <div style="min-width:0"><div><span class="m">${r.m}</span> <span class="route ${r.r}">${r.r === 'cx' ? 'Codex' : 'Claude 订阅'}</span></div>
+          <div class="sub">${r.err ? esc(r.err) : `${r.tin.toLocaleString()} → ${r.tout.toLocaleString()} tokens`}</div></div>
+          <div class="st"><div>${r.s === 200 ? (r.ms / 1000).toFixed(1) + 's' : r.s}</div><div class="sub">${r.t}</div></div></div>`).join('')}</div>`
+      : `<div class="logs">${esc(LOGS)}</div><button class="btn" data-a="toast" data-v="已复制 6 行日志">${ic('copy', 14)} 复制全部</button>`}`;
+  } else {
+    body = settingsA();
+  }
+  const errs = REQS.some((r) => r.s >= 400);
+  const sheet = S.upd !== null || S.aSheet ? updSheetA() : '';
+  return `<div class="app A">
+    <div class="hd">${LOGO.replace('<svg', '<svg width="28" height="28"')}<b>CC Bridge</b><span class="sp"></span>${upPill}</div>
+    <div class="body">${body}</div>
+    <nav class="tabs">${[['home', 'home', '主页'], ['models', 'layers', '模型'], ['feed', 'activity', '动态'], ['settings', 'gear', '设置']].map(([k, i, l]) =>
+      `<button class="${S.tabA === k ? 'on' : ''}" data-a="a-tab" data-v="${k}">${ic(i, 20)}${l}${k === 'feed' && errs ? '<i class="badge"></i>' : ''}${k === 'settings' && S.update ? '<i class="badge" style="background:var(--acc)"></i>' : ''}</button>`).join('')}</nav>
+    ${sheet}${toastHtml()}</div>`;
+}
+function settingsA() {
+  const c = S.cfg;
+  const net = S.net === 'run' ? '<span class="res"><span class="spin"></span></span>' : S.net ? `<span class="res ${S.net.ok ? 'ok' : 'err'}">${S.net.ok ? ic('check', 13) + ' ' + S.net.ms + 'ms' : ic('alert', 13) + ' 不通'}</span>` : `<button class="btn" style="height:28px" data-a="net">测试</button>`;
+  const saved = S.savedAt ? `<span class="saved">${ic('check', 12)} 已保存，代理已重启</span>` : '';
+  const ver = S.update ? `<div class="upcard"><div style="display:flex;align-items:center;gap:10px"><div style="flex:1"><b>新版本 ${S.update.version}</b><div style="color:var(--t2);font-size:12px">当前 0.1.3</div></div>
+      ${S.upd === null ? `<button class="btn pri" data-a="a-upd-go">更新并重启</button>` : ''}</div>
+      ${S.upd !== null ? `<div class="bar"><i style="width:${S.upd === 'restart' ? 100 : S.upd}%"></i></div><div style="font-size:12px;color:var(--t2);margin-top:6px">${S.upd === 'restart' ? '安装中，客户端会自动重新打开…' : `正在下载 ${S.upd}%`}</div>` : ''}</div>`
+    : `<div class="srow"><div class="ic">${ic('download', 15)}</div><div class="lb"><b>版本 ${S.updated ? '0.1.4' : '0.1.3'}</b><span>每 6 小时自动检查一次</span></div>
+      ${S.checkUpd ? '<span class="res"><span class="spin"></span> 检查中</span>' : `<button class="btn" style="height:28px" data-a="chk-upd">检查更新</button>`}</div>`;
+  return `
+    <div><div class="sgroup-t">网络 ${saved}</div><div class="sgroup">
+      <div class="srow"><div class="ic">${ic('globe', 15)}</div><div class="lb"><b>出口代理</b><span>代理访问 OpenAI 时走这里</span></div><input class="v" data-in="proxy" value="${esc(c.proxy)}"> ${net}</div>
+      <div class="srow"><div class="ic">${ic('server', 15)}</div><div class="lb"><b>本机端口</b><span>被占用时换一个</span></div><input class="v" style="width:90px" data-in="port" value="${esc(c.port)}"></div>
+    </div></div>
+    <div><div class="sgroup-t">通用</div><div class="sgroup">
+      <div class="srow"><div class="ic">${ic('boot', 15)}</div><div class="lb"><b>开机自动运行</b><span>只在托盘里运行，不弹窗口</span></div><button class="sw ${c.autostart ? 'on' : ''}" data-a="autostart"></button></div>
+      <div class="srow"><div class="ic">${ic('lang', 15)}</div><div class="lb"><b>界面语言</b></div><span style="color:var(--t2)">${c.lang} ${ic('right', 14)}</span></div>
+    </div></div>
+    <div><div class="sgroup-t">高级</div><div class="sgroup">
+      <div class="srow"><div class="ic">${ic('folder', 15)}</div><div class="lb"><b>Codex 目录</b><span>默认 ~/.codex</span></div><input class="v" data-in="codexDir" placeholder="默认" value="${esc(c.codexDir)}"></div>
+      <div class="srow"><div class="ic">${ic('folder', 15)}</div><div class="lb"><b>Claude 目录</b><span>默认 ~/.claude</span></div><input class="v" data-in="claudeDir" placeholder="默认" value="${esc(c.claudeDir)}"></div>
+    </div></div>
+    <div><div class="sgroup-t">关于</div>${S.update ? ver : `<div class="sgroup">${ver}</div>`}</div>`;
+}
+function updSheetA() {
+  if (S.upd === null && !S.aSheet) return '';
+  const u = S.update || UPDATE;
+  return `<div class="mask" data-a="a-sheet-close"></div><div class="sheet"><div class="grab"></div>
+    <h3>新版本 ${u.version}</h3><div style="color:var(--t3);font-size:12px">当前 0.1.3 · 大约 7 MB</div>
+    <ul>${u.notes.map((n) => `<li>${n}</li>`).join('')}</ul>
+    ${S.upd === null ? `<div style="display:flex;gap:8px"><button class="btn" style="flex:1" data-a="a-sheet-close">稍后</button><button class="btn pri" style="flex:2" data-a="a-upd-go">更新并重启</button></div>
+      <div style="font-size:11.5px;color:var(--t3);margin-top:10px;text-align:center">更新时会先恢复 Claude Code 配置，装好后自动重新接管</div>`
+      : `<div class="bar"><i style="width:${S.upd === 'restart' ? 100 : S.upd}%"></i></div><div style="font-size:12.5px;color:var(--t2);margin-top:8px">${S.upd === 'restart' ? '安装中，客户端会自动重新打开…' : `正在下载 ${S.upd}%`}</div>`}
+  </div>`;
+}
+function renderAob() {
+  const o = S.ob;
+  if (o.done) {
+    return `<div class="app A"><div class="ob" style="text-align:center">
+      <div class="done-ic">${ic('check', 38)}</div>
+      <h1>好了，可以用了</h1><p class="sub" style="margin-bottom:0">打开一个新的终端，启动 Claude Code，输入 /model 就能看到 Codex 模型。</p>
+      <div class="term" style="text-align:left"><div><span class="p">$</span> claude</div><div><span class="p">&gt;</span> /model</div>
+        <div style="margin-top:6px">  Default (Opus 5.5)</div><div>  Sonnet 5.5</div><div class="p">  ── Codex ──</div>
+        ${DEFAULT_SEL.slice(0, 4).map((m, i) => `<div class="${i === 0 ? 'sel' : ''}"><span class="hl">${i === 0 ? '❯' : ' '}</span> ${m}</div>`).join('')}<div class="p">  … 还有 2 个</div></div>
+      <div class="cta"><button class="btn big dark" data-a="ob-finish">进入主页</button></div></div>${toastHtml()}</div>`;
+  }
+  const rows = Object.entries(o.checks).map(([k, st]) => {
+    const [t, okd, fd] = CHECK_INFO[k];
+    const icon = st === 'ok' ? ic('check') : st === 'fail' ? ic('x') : st === 'run' ? '<span class="spin"></span>' : '';
+    return `<div class="chk"><span class="st ${st}">${icon}</span><div style="flex:1"><b>${t}</b><div class="d">${st === 'ok' ? okd : st === 'fail' ? fd : st === 'run' ? '检测中…' : '等待检测'}</div>
+      ${st === 'fail' ? `<div class="fix"><button class="btn dark" data-a="ob-fix" data-v="${k}">${ic('terminal', 14)} 打开登录</button><button class="btn" data-a="ob-recheck">重新检测</button></div>` : ''}</div></div>`;
+  }).join('');
+  const ready = allOk();
+  return `<div class="app A"><div class="ob">
+    ${LOGO.replace('<svg', '<svg class="logo-big"')}
+    <h1>欢迎使用 CC Bridge</h1><p class="sub">让 Claude Code 在同一个 /model 菜单里，同时用上 Claude 和 Codex 模型。</p>
+    <div class="card" style="padding:4px 0">${rows}</div>
+    <details class="opt"><summary>${ic('chevD', 14)} 选项：开机自启 ${o.autostart ? '开' : '关'} · 端口 ${S.cfg.port} · 出口代理 127.0.0.1:7890</summary>
+      <div class="card" style="margin-top:8px;padding:4px 0"><div class="srow" style="display:flex;align-items:center;gap:12px;padding:10px 14px"><div class="lb" style="flex:1"><b>开机自动运行</b></div><button class="sw ${o.autostart ? 'on' : ''}" data-a="ob-auto"></button></div></div></details>
+    <div class="cta">
+      <button class="btn big pri" data-a="ob-go" ${ready ? '' : 'disabled'}>${ready ? ic('zap', 16) + ' 一键接管 Claude Code' : '<span class="spin"></span> 检测中…'}</button>
+      <button class="skip" data-a="ob-go-noto" ${ready ? '' : 'disabled'}>先不接管，只启动代理</button>
+    </div></div>${toastHtml()}</div>`;
+}
+
+// ═════════════ 方案 B ═════════════
+function renderB() {
+  if (S.view === 'ob') return renderBob();
+  const [tone, txt] = overall();
+  const errs = REQS.filter((r) => r.s >= 400).length;
+  const nav = [['overview', 'home', '概览'], ['models', 'layers', '模型'], ['reqs', 'activity', '请求'], ['settings', 'gear', '设置']];
+  const rail = `<aside class="rail"><div class="brand">${LOGO}CC Bridge</div>
+    ${nav.map(([k, i, l]) => `<button class="nav ${S.tabB === k ? 'on' : ''}" data-a="b-tab" data-v="${k}">${ic(i)}${l}${k === 'reqs' && errs ? `<span class="n">${errs}</span>` : ''}</button>`).join('')}
+    <span class="sp"></span>
+    <div class="rstat"><b><span class="dot ${tone}"></span>${txt.split(' · ')[0]}</b>${S.proxy === 'running' ? `127.0.0.1:${S.cfg.port}<br>已运行 2 小时 14 分` : S.proxy === 'starting' ? '启动中…' : '端口被占用'}</div>
+    <button class="rver" data-a="b-tab" data-v="settings">v${S.updated ? '0.1.4' : '0.1.3'}${S.update ? `<span class="up">↑ ${S.update.version}</span>` : ''}</button></aside>`;
+  const take = `<span class="tog">接管 Claude Code <button class="sw ${S.takeover ? 'on' : ''}" data-a="takeover" aria-label="接管"></button></span>`;
+  const banners = issues().map((x) => `<div class="banner ${x.lv}">${ic('alert', 16)}<div class="tx"><b>${x.t}</b> · ${x.d}</div>${x.acts.map(([a, l], i) => `<button class="btn ${i === 0 ? 'pri' : ''}" data-a="fix" data-v="${a}">${l}</button>`).join('')}</div>`).join('')
+    + (S.update && S.tabB !== 'settings' ? `<div class="banner info">${ic('download', 16)}<div class="tx"><b>新版本 ${S.update.version}</b> · ${S.update.notes[0]}…</div><button class="btn" data-a="b-tab" data-v="settings">查看并更新</button></div>` : '');
+  let title = '', right = '', body = '';
+  if (S.tabB === 'overview') {
+    title = '概览'; right = take;
+    const bars = [3, 5, 2, 8, 12, 9, 4, 6, 14, 11, 7, 10, 16, 13, 9, 12, 18, 15, 11, 8, 14, 17, 12, 9];
+    body = `${banners}
+      <div class="tiles">
+        <div class="tile"><div class="k">${ic('user', 13)} Codex 账号</div><div class="v"><span class="dot ${S.codex === 'ok' ? 'ok' : 'warn'}"></span>${S.codex === 'ok' ? 'Plus' : '已过期'}</div><div class="s">${S.codex === 'ok' ? '有效期到 11-27，还剩 9 天' : '需要重新登录'}</div></div>
+        <div class="tile"><div class="k">${ic('layers', 13)} 启用的模型</div><div class="v">${S.sel.size} <span style="font-size:12px;color:var(--t3);font-weight:400">/ ${MODELS.length}</span></div><div class="s">最常用 gpt-6.2-sol</div></div>
+        <div class="tile"><div class="k">${ic('activity', 13)} 今天的请求</div><div class="v">128 <span style="font-size:12px;color:var(--err);font-weight:500">${errs} 个出错</span></div><div class="spark">${bars.map((b, i) => `<i class="${i === 14 ? 'e' : ''}" style="height:${b * 5}%"></i>`).join('')}</div></div>
+      </div>
+      <div class="panel"><div class="panel-h">最近请求<button class="link" data-a="b-tab" data-v="reqs">全部 →</button></div>${reqTable(REQS.slice(0, 5))}</div>`;
+  } else if (S.tabB === 'models') {
+    title = '模型'; right = `<span style="color:var(--t3);font-size:12px">已选 ${S.sel.size} / ${MODELS.length}</span>`;
+    const q = S.q.toLowerCase();
+    const shown = MODELS.filter((m) => m.id.includes(q));
+    const sel = MODELS.filter((m) => S.sel.has(m.id));
+    body = `
+      <div class="preview"><div class="t">Claude Code 里输入 /model 会看到：</div>
+        <div>  Default (Opus 5.5)</div><div>  Sonnet 5.5 · Haiku 5.5</div><div class="grp">  ── Codex（${sel.length}）──</div>
+        ${sel.slice(0, 5).map((m, i) => `<div class="cx ${i === 0 ? 'cur' : ''}">${i === 0 ? '❯' : ' '} ${m.id}</div>`).join('')}${sel.length > 5 ? `<div class="t">  … 还有 ${sel.length - 5} 个</div>` : ''}${!sel.length ? '<div class="t">  （没有选 Codex 模型）</div>' : ''}</div>
+      <div style="display:flex;gap:8px"><div class="search">${ic('search', 14)}<input data-in="q" placeholder="搜索模型" value="${esc(S.q)}"></div>
+        <button class="btn" data-a="m-def">推荐</button><button class="btn" data-a="m-all">全选</button><button class="btn" data-a="m-none">清空</button></div>
+      <div class="panel mlist">${shown.map((m) => `<div class="row" data-a="model" data-v="${m.id}"><span class="cb ${S.sel.has(m.id) ? 'on' : ''}">${S.sel.has(m.id) ? ic('check') : ''}</span><span class="nm">${m.id}</span>${m.latest ? '<span class="new">最新</span>' : ''}<span class="use">${m.use ? `7 天 ${m.use} 次` : '—'}</span></div>`).join('')}</div>`;
+  } else if (S.tabB === 'reqs') {
+    title = '请求'; right = `<button class="btn" data-a="b-raw">${ic(S.rawB ? 'activity' : 'log', 14)} ${S.rawB ? '请求列表' : '原始日志'}</button>`;
+    const list = REQS.filter((r) => S.reqFilter === 'all' || (S.reqFilter === 'err' ? r.s >= 400 : r.r === S.reqFilter));
+    body = S.rawB ? `<div class="logs">${esc(LOGS)}</div><div><button class="btn" data-a="toast" data-v="已复制 6 行日志">${ic('copy', 14)} 复制全部</button></div>`
+      : `<div class="filters">${[['all', '全部'], ['cx', 'Codex'], ['cl', 'Claude 订阅'], ['err', '出错']].map(([k, l]) => `<button class="fchip ${S.reqFilter === k ? 'on' : ''}" data-a="b-filter" data-v="${k}">${l}</button>`).join('')}<span style="margin-left:auto;color:var(--t3);font-size:12px">点一行看详情</span></div>
+        <div class="panel">${reqTable(list)}</div>
+        ${S.drawer !== null ? drawerB(REQS[S.drawer]) : ''}`;
+  } else {
+    title = '设置'; right = '';
+    body = settingsB();
+  }
+  return `<div class="app B">${rail}<div class="main"><div class="ph"><h2>${title}</h2><span class="sp"></span>${right}</div><div class="content">${body}</div></div>${toastHtml()}</div>`;
+}
+function reqTable(list) {
+  return `<table><thead><tr><th>时间</th><th>模型</th><th>通道</th><th>状态</th><th style="text-align:right">耗时</th></tr></thead><tbody>
+    ${list.map((r) => { const i = REQS.indexOf(r); return `<tr class="${S.drawer === i && S.tabB === 'reqs' ? 'sel' : ''}" data-a="b-row" data-v="${i}"><td>${r.t}</td><td class="mono">${r.m}</td><td><span class="tag ${r.r}">${r.r === 'cx' ? 'Codex' : 'Claude'}</span></td><td><span class="code ${r.s === 200 ? 'ok' : 'err'}">${r.s}</span></td><td style="text-align:right">${(r.ms / 1000).toFixed(2)}s</td></tr>`; }).join('')}
+    ${list.length ? '' : '<tr><td colspan="5" style="color:var(--t3)">没有匹配的请求</td></tr>'}</tbody></table>`;
+}
+function drawerB(r) {
+  return `<div class="drawer"><h3>请求详情<button class="btn" style="width:28px;padding:0" data-a="b-close">${ic('x', 14)}</button></h3>
+    <div class="kv"><span>时间</span><span>今天 ${r.t}</span><span>模型</span><span>${r.m}</span><span>通道</span><span>${r.r === 'cx' ? 'Codex（ChatGPT 订阅）' : 'Claude 订阅（原样转发）'}</span>
+      <span>推理强度</span><span>high</span><span>状态</span><span>${r.s}</span><span>耗时</span><span>${r.ms} ms</span><span>输入</span><span>${r.tin.toLocaleString()} tokens</span><span>输出</span><span>${r.tout.toLocaleString()} tokens</span><span>请求 ID</span><span>c3eb-add3-5459</span></div>
+    ${r.err ? `<div class="errbox"><b>为什么失败</b><div style="margin-top:4px">${esc(r.err)}</div><div style="margin-top:8px;color:var(--t3)">Claude Code 会自动重试；也可以先切到别的模型。</div></div>` : ''}</div>`;
+}
+function settingsB() {
+  const d = S.draft || S.cfg;
+  const dirty = S.draft && JSON.stringify(S.draft) !== JSON.stringify(S.cfg);
+  const net = S.net === 'run' ? '<div class="hint"><span class="spin" style="width:10px;height:10px"></span> 正在测试…</div>' : S.net ? `<div class="hint ${S.net.ok ? 'ok' : 'err'}">${S.net.ok ? `能连上 api.openai.com，延迟 ${S.net.ms}ms` : S.net.msg}</div>` : '<div class="hint">国内网络一般要填本机代理地址</div>';
+  const upd = S.update ? `<div class="upd"><b>新版本 ${S.update.version}</b> <span style="color:var(--t3);font-size:12px">当前 0.1.3</span><ul>${S.update.notes.map((n) => `<li>${n}</li>`).join('')}</ul>
+      ${S.upd === null ? `<button class="btn acc" data-a="b-upd-go">${ic('download', 14)} 下载并重启</button>` : `<div class="bar"><i style="width:${S.upd === 'restart' ? 100 : S.upd}%"></i></div><div class="hint" style="font-size:12px;color:var(--t2);margin-top:6px">${S.upd === 'restart' ? '安装中，客户端会自动重新打开…' : `正在下载 ${S.upd}%`}</div>`}</div>`
+    : `<div style="display:flex;align-items:center;gap:10px"><span>当前版本 ${S.updated ? '0.1.4' : '0.1.3'}</span>${S.checkUpd ? '<span class="spin" style="width:12px;height:12px"></span> <span style="color:var(--t3)">正在检查…</span>' : `<button class="btn" data-a="chk-upd">检查更新</button>`}</div><div class="hint" style="font-size:11.5px;color:var(--t3);margin-top:4px">每 6 小时自动检查一次</div>`;
+  return `<div class="form">
+    <div class="fsec"><h4>网络<span>代理怎么访问 OpenAI</span></h4><div class="fields">
+      <div class="f"><label>出口代理</label><div class="in"><input class="mono" data-in="d-proxy" value="${esc(d.proxy)}"><button class="btn" data-a="net">测试</button></div>${net}</div>
+      <div class="f"><label>本机端口</label><input class="mono" style="width:120px" data-in="d-port" value="${esc(d.port)}"></div></div></div>
+    <div class="fsec"><h4>启动<span>客户端怎么运行</span></h4><div class="fields">
+      <div class="f" style="display:flex;align-items:center;justify-content:space-between"><label style="margin:0">开机自动运行（只在托盘）</label><button class="sw ${d.autostart ? 'on' : ''}" data-a="d-auto"></button></div>
+      <div class="f"><label>界面语言</label><select data-in="d-lang"><option>跟随系统</option><option>简体中文</option><option>English</option><option>日本語</option></select></div></div></div>
+    <div class="fsec"><h4>目录<span>一般不用改</span></h4><div class="fields">
+      <div class="f"><label>Codex 目录</label><input class="mono" placeholder="默认 ~/.codex" data-in="d-codexDir" value="${esc(d.codexDir)}"></div>
+      <div class="f"><label>Claude 目录</label><input class="mono" placeholder="默认 ~/.claude" data-in="d-claudeDir" value="${esc(d.claudeDir)}"></div></div></div>
+    <div class="fsec"><h4>关于</h4><div class="fields">${upd}</div></div></div>
+    ${dirty ? `<div class="savebar">${ic('alert', 15)} 有未保存的改动，保存后会重启代理<span class="sp"></span><button class="btn ghost" data-a="d-reset">放弃</button><button class="btn acc" data-a="d-save">保存并重启代理</button></div>` : ''}`;
+}
+function renderBob() {
+  const o = S.ob;
+  const steps = [['环境检查', '账号和配置'], ['网络', '怎么访问 OpenAI'], ['选择模型', '出现在 /model 里'], ['完成', '接管并试一下']];
+  const side = `<div class="steps"><div class="brand">${LOGO}CC Bridge</div>${steps.map(([t, s], i) => `<div class="stp ${i === o.step ? 'on' : i < o.step ? 'done' : ''}"><span class="n">${i < o.step ? ic('check') : i + 1}</span><div>${t}<span>${s}</span></div></div>`).join('')}</div>`;
+  let main = '', next = '';
+  if (o.step === 0) {
+    main = `<h2>检查环境</h2><p class="lead">自动检测下面四项，有问题会告诉你怎么处理。</p>
+      <div class="panel">${Object.entries(o.checks).map(([k, st]) => { const [t, okd, fd] = CHECK_INFO[k]; return `<div class="chk"><span class="ic ${st}">${st === 'ok' ? ic('check') : st === 'fail' ? ic('x') : st === 'run' ? '<span class="spin" style="width:12px;height:12px"></span>' : ''}</span><div style="flex:1"><b>${t}</b><div class="d">${st === 'ok' ? okd : st === 'fail' ? fd : st === 'run' ? '检测中…' : '—'}</div>${st === 'fail' ? `<div style="margin-top:8px;display:flex;gap:6px"><button class="btn pri" data-a="ob-fix" data-v="${k}">${ic('terminal', 14)} 打开 codex login</button></div>` : ''}</div></div>`; }).join('')}</div>
+      <div class="why"><b>为什么需要这些？</b> 代理用你本机 Codex 的 ChatGPT 登录来调用 Codex 模型，并通过修改 Claude Code 的 settings.json 把请求接过来。退出客户端时配置会自动恢复。</div>`;
+    next = `<button class="btn pri" data-a="ob-next" ${allOk() ? '' : 'disabled'}>下一步 ${ic('arrowR', 14)}</button>`;
+  } else if (o.step === 1) {
+    const r = (k, t, s, extra = '') => `<button class="ropt ${o.netChoice === k ? 'on' : ''}" data-a="ob-net" data-v="${k}"><span class="r"></span><div><b>${t}</b><span>${s}</span>${extra}</div></button>`;
+    main = `<h2>网络</h2><p class="lead">代理需要访问 api.openai.com。国内网络一般要走本机代理。</p>
+      <div class="radio">${r('detected', '使用系统代理 127.0.0.1:7890', '在系统设置里检测到的，推荐')}${r('direct', '直连', '能直接访问 OpenAI 时选这个')}${r('custom', '手动填写', 'HTTP 或 SOCKS5 地址', o.netChoice === 'custom' ? `<div><input data-in="ob-custom" placeholder="http://127.0.0.1:7890" value="${esc(o.netCustom)}"></div>` : '')}</div>
+      ${o.test === 'run' ? '<div class="testres run"><span class="spin"></span> 正在测试连通性…</div>' : o.test ? `<div class="testres ok">${ic('check', 14)} 能连上 api.openai.com，延迟 286ms</div>` : ''}`;
+    next = o.test && o.test !== 'run' ? `<button class="btn pri" data-a="ob-next">下一步 ${ic('arrowR', 14)}</button>` : `<button class="btn pri" data-a="ob-test" ${o.test === 'run' ? 'disabled' : ''}>测试并继续</button>`;
+  } else if (o.step === 2) {
+    const sel = MODELS.filter((m) => o.sel.has(m.id));
+    main = `<h2>选择模型</h2><p class="lead">选中的模型会出现在 Claude Code 的 /model 菜单里，之后随时可以改。</p>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0">
+        <div class="panel mlist" style="max-height:330px;overflow:auto">${MODELS.map((m) => `<div class="row" data-a="ob-model" data-v="${m.id}"><span class="cb ${o.sel.has(m.id) ? 'on' : ''}">${o.sel.has(m.id) ? ic('check') : ''}</span><span class="nm" style="font-size:12px">${m.id}</span></div>`).join('')}</div>
+        <div class="preview" style="font-size:11.5px"><div class="t">/model 预览</div><div>  Default (Opus 5.5)</div><div>  Sonnet 5.5</div><div class="grp">  ── Codex ──</div>${sel.slice(0, 7).map((m, i) => `<div class="cx ${i === 0 ? 'cur' : ''}">${i === 0 ? '❯' : ' '} ${m.id}</div>`).join('')}${sel.length > 7 ? `<div class="t">  … +${sel.length - 7}</div>` : ''}</div>
+      </div>`;
+    next = `<button class="btn pri" data-a="ob-next" ${o.sel.size ? '' : 'disabled'}>下一步 ${ic('arrowR', 14)}</button>`;
+  } else {
+    main = `<h2>接管并试一下</h2><p class="lead">打开接管后，新开的 Claude Code 窗口就能用了。可以先发一条测试请求确认链路通了。</p>
+      <div class="panel" style="padding:12px;display:flex;align-items:center;gap:10px"><div style="flex:1"><b>接管 Claude Code</b><div style="font-size:12px;color:var(--t3)">写入 ~/.claude/settings.json，退出时自动恢复</div></div><button class="sw ${o.takeover ? 'on' : ''}" data-a="ob-take"></button></div>
+      <div class="panel" style="padding:12px;display:flex;align-items:center;gap:10px;margin-top:8px"><div style="flex:1"><b>开机自动运行</b><div style="font-size:12px;color:var(--t3)">只在托盘运行</div></div><button class="sw ${o.autostart ? 'on' : ''}" data-a="ob-auto"></button></div>
+      <div style="margin-top:12px"><button class="btn" data-a="ob-ping" ${o.test === 'ping' ? 'disabled' : ''}>${ic('send', 14)} 用 gpt-6.2-sol 发一条测试请求</button></div>
+      ${o.test === 'ping' ? '<div class="testres run"><span class="spin"></span> 等待回复…</div>' : o.test === 'pong' ? `<div class="testres ok">${ic('check', 14)} 收到回复「pong」，耗时 1.4s，链路正常</div>` : ''}`;
+    next = `<button class="btn acc" data-a="ob-finish">${ic('check', 14)} 完成</button>`;
+  }
+  const back = o.step > 0 ? `<button class="btn" data-a="ob-back">${ic('left', 14)} 上一步</button>` : '';
+  return `<div class="app B"><div class="ob">${side}<div class="obm">${main}<div class="obnav">${back}<span class="sp"></span>${next}</div></div></div>${toastHtml()}</div>`;
+}
+
+// ═════════════ 方案 C ═════════════
+function renderC() {
+  const desk = (inner) => `<div class="desk">${inner}<div class="taskbar"><span>中</span><button class="tray" data-a="c-tray" title="CC Bridge">${LOGO}<span class="d" style="background:${overall()[0] === 'ok' ? '#34d399' : overall()[0] === 'warn' ? '#fbbf24' : '#f87171'}"></span></button><div class="clock">10:24<br>2026/11/18</div></div></div>`;
+  if (S.cClosed) return desk('');
+  if (S.view === 'ob') return desk(`<div class="C">${renderCob()}${toastHtml()}</div>`);
+  const [tone, txt] = overall();
+  let v = '';
+  if (S.viewC === 'home') {
+    const q = S.q.trim().toLowerCase();
+    let list = '';
+    if (q) {
+      const acts = [['重启代理', 'refresh', 'c-restart'], ['复制日志', 'copy', 'c-copy'], ['检查更新', 'download', 'c-chk'], ['打开设置', 'gear', 'c-go-settings'], ['查看日志', 'log', 'c-go-logs']].filter(([l]) => l.includes(q) || q === '>' );
+      const ms = MODELS.filter((m) => m.id.includes(q));
+      const items = [...ms.map((m) => ({ k: 'm', m })), ...acts.map((a) => ({ k: 'a', a }))];
+      S._items = items;
+      list = `${ms.length ? '<div class="grp-t">模型（回车启用 / 停用）</div>' : ''}${items.map((it, i) => it.k === 'm'
+        ? `<div class="it ${i === S.cur ? 'cur' : ''}" data-a="model" data-v="${it.m.id}"><span class="chk ${S.sel.has(it.m.id) ? 'on' : ''}">${S.sel.has(it.m.id) ? ic('check') : ''}</span><span class="nm">${it.m.id}</span><span class="k">${S.sel.has(it.m.id) ? '已启用' : '未启用'}</span></div>`
+        : `${i === ms.length ? '<div class="grp-t">操作</div>' : ''}<div class="it ${i === S.cur ? 'cur' : ''}" data-a="${it.a[2]}"><span class="ic">${ic(it.a[1])}</span><span class="nm" style="font-family:var(--sans)">${it.a[0]}</span><span class="k">↵</span></div>`).join('')}
+        ${items.length ? '' : '<div class="grp-t">没有匹配的模型或操作</div>'}`;
+    } else {
+      S._items = null;
+      const sel = MODELS.filter((m) => S.sel.has(m.id));
+      list = sel.map((m) => `<div class="it"><span class="dot ok"></span><span class="nm">${m.id}</span>${m.latest ? '<span class="new">最新</span>' : ''}<span class="k">${m.use ? m.use + ' 次' : ''}</span><button class="rm" data-a="model" data-v="${m.id}" title="停用">${ic('x', 14)}</button></div>`).join('')
+        + `<div class="it" data-a="c-focus" style="color:var(--t3)"><span class="ic">${ic('plus')}</span>添加模型…</div>`;
+    }
+    v = `<div class="vw">
+      <div class="top">${LOGO.replace('<svg', '<svg class="lg"')}<div class="tt"><b>CC Bridge</b><div class="st"><span class="dot ${tone}"></span>${txt}${S.proxy === 'running' ? ' · :' + S.cfg.port : ''}</div></div>
+        <button class="bigsw ${S.takeover ? 'on' : ''}" data-a="takeover" aria-label="接管 Claude Code" title="接管 Claude Code"></button></div>
+      <label class="cmd">${ic('search', 15)}<input id="cmdq" data-in="q" placeholder="搜索模型或操作…" value="${esc(S.q)}" autocomplete="off"><kbd>Ctrl K</kbd></label>
+      ${issues().map((x) => `<div class="issue ${x.lv}">${ic('alert', 15)}<div class="tx"><b>${x.t}</b><span>${x.d}</span><div class="acts">${x.acts.map(([a, l], i) => `<button class="btn ${i === 0 ? 'pri' : ''}" data-a="fix" data-v="${a}">${l}</button>`).join('')}</div></div></div>`).join('')}
+      <div class="sh">${q ? '搜索结果' : `已启用 ${S.sel.size} 个模型`}${q ? '' : '<button data-a="c-focus">管理</button>'}</div>
+      <div class="list">${list}</div>
+      <div class="foot"><button class="fb" data-a="c-go-logs">${ic('log', 15)} 日志</button><button class="fb" data-a="c-go-settings">${ic('gear', 15)} 设置</button>
+        ${S.update ? `<button class="fb up" data-a="c-go-update">${ic('download', 15)} 更新到 ${S.update.version}</button>` : ''}<span class="sp"></span><button class="fb" data-a="toast" data-v="退出前会先恢复 Claude Code 配置">${ic('logout', 15)}</button></div></div>`;
+  } else if (S.viewC === 'logs') {
+    v = `<div class="vw"><div class="stack-h"><button class="back" data-a="c-back">${ic('left')}</button><b>日志</b><button class="btn" data-a="toast" data-v="已复制 6 行日志">${ic('copy', 14)} 复制</button></div>
+      <div class="pad"><div class="logs">${esc(LOGS)}</div></div></div>`;
+  } else if (S.viewC === 'settings') {
+    const c = S.cfg;
+    v = `<div class="vw"><div class="stack-h"><button class="back" data-a="c-back">${ic('left')}</button><b>设置</b>${S.savedAt ? `<span style="font-size:11.5px;color:var(--ok)">已保存</span>` : ''}</div>
+      <div class="pad">
+        <div class="stitle">网络</div><div class="sl">
+          <div class="sr"><div class="lb">出口代理<span>${S.net === 'run' ? '测试中…' : S.net ? (S.net.ok ? '能连上 OpenAI · ' + S.net.ms + 'ms' : S.net.msg) : '访问 OpenAI 走这里'}</span></div><input data-in="proxy" value="${esc(c.proxy)}"></div>
+          <div class="sr"><div class="lb">本机端口</div><input data-in="port" style="width:90px" value="${esc(c.port)}"></div></div>
+        <div class="stitle">通用</div><div class="sl">
+          <div class="sr"><div class="lb">开机自动运行</div><button class="sw ${c.autostart ? 'on' : ''}" data-a="autostart"></button></div>
+          <div class="sr"><div class="lb">界面语言</div><span style="color:var(--t2)">${c.lang}</span></div></div>
+        <div class="stitle">关于</div><div class="sl">
+          <div class="sr"><div class="lb">版本 ${S.updated ? '0.1.4' : '0.1.3'}<span>${S.update ? '有新版本 ' + S.update.version : '每 6 小时自动检查'}</span></div>
+          ${S.update ? `<button class="btn pri" data-a="c-go-update">查看</button>` : S.checkUpd ? '<span class="spin"></span>' : `<button class="btn" data-a="chk-upd">检查更新</button>`}</div></div>
+        <div style="font-size:11.5px;color:var(--t3);margin-top:10px">改完自动保存；改端口或出口代理会重启代理。</div>
+      </div></div>`;
+  } else if (S.viewC === 'update') {
+    const u = S.update || UPDATE;
+    v = `<div class="vw"><div class="stack-h"><button class="back" data-a="c-back">${ic('left')}</button><b>更新</b></div>
+      <div class="pad uv"><div style="color:var(--t3);font-size:12px">当前 0.1.3</div><h3>新版本 ${u.version}</h3><ul>${u.notes.map((n) => `<li>${n}</li>`).join('')}</ul>
+        ${S.upd === null ? `<button class="btn pri big" data-a="c-upd-go">${ic('download', 16)} 更新并重启</button><div style="font-size:11.5px;color:var(--t3);margin-top:10px;text-align:center">更新时先恢复 Claude Code 配置，装好后自动重新接管</div>`
+          : `<div class="bar"><i style="width:${S.upd === 'restart' ? 100 : S.upd}%"></i></div><div style="font-size:12.5px;color:var(--t2);margin-top:8px">${S.upd === 'restart' ? '安装中，客户端会自动重新打开…' : `正在下载 ${S.upd}%`}</div>`}</div></div>`;
+  }
+  return desk(`<div class="C">${v}${toastHtml()}</div>`);
+}
+function renderCob() {
+  const o = S.ob;
+  const dots = `<div class="dots">${[0, 1, 2, 3].map((i) => `<i class="${i <= o.step ? 'on' : ''}"></i>`).join('')}</div>`;
+  if (o.done) {
+    return `<div class="ob"><div class="celebrate">${ic('check', 36)}</div><div class="q">都准备好了</div>
+      <p class="qs">CC Bridge 会一直待在右下角托盘里。新开一个 Claude Code，输入 <b>/model</b> 就能选 Codex 模型。</p>
+      <div class="bottom"><button class="btn pri big" data-a="ob-finish">知道了</button></div></div>`;
+  }
+  if (o.step === 0) {
+    const ok = allOk();
+    return `<div class="ob">${dots}<div class="q">先看看你的电脑准备好了没有</div><p class="qs">自动检测，几秒钟就好。</p>
+      <div class="chks">${Object.entries(o.checks).map(([k, st]) => { const [t, okd, fd] = CHECK_INFO[k]; return `<div class="ck"><span class="ci ${st}">${st === 'ok' ? ic('check') : st === 'fail' ? ic('x') : st === 'run' ? '<span class="spin" style="width:12px;height:12px"></span>' : ''}</span>${t}<span class="d">${st === 'ok' ? okd.split(' · ')[0] : st === 'fail' ? '需要处理' : ''}</span></div>`; }).join('')}</div>
+      ${o.checks.login === 'fail' ? `<div class="hint">${ic('alert', 15)} ChatGPT 登录过期了<button class="btn pri" style="margin-left:auto" data-a="ob-fix" data-v="login">去登录</button></div>` : ''}
+      <div class="bottom"><button class="btn pri big" data-a="ob-next" ${ok ? '' : 'disabled'}>${ok ? '继续' : '检测中…'}</button></div></div>`;
+  }
+  if (o.step === 1) {
+    return `<div class="ob">${dots}<div class="q">访问 OpenAI 需要走代理吗？</div><p class="qs">国内网络一般需要。选完会自动测一下能不能连上。</p>
+      <div class="ans">
+        <button data-a="ob-net-pick" data-v="detected"><span class="ai">${ic('globe')}</span><div><b>用 127.0.0.1:7890</b><span>从系统设置里检测到的</span></div><span class="rec">推荐</span></button>
+        <button data-a="ob-net-pick" data-v="direct"><span class="ai">${ic('zap')}</span><div><b>不需要，直连</b><span>能直接打开 chatgpt.com 时选这个</span></div></button>
+        <button data-a="ob-net-pick" data-v="custom"><span class="ai">${ic('edit')}</span><div><b>我自己填</b><span>HTTP 或 SOCKS5 地址</span></div></button></div>
+      ${o.test === 'run' ? '<div class="hint"><span class="spin"></span> 正在测试连通性…</div>' : o.test === 'ok' ? `<div class="hint ok">${ic('check', 15)} 连上了，延迟 286ms</div>` : ''}
+      <div class="bottom"><button class="ghost" data-a="ob-back">返回</button></div></div>`;
+  }
+  if (o.step === 2) {
+    return `<div class="ob">${dots}<div class="q">现在就让 Claude Code 用上 Codex 模型吗？</div>
+      <p class="qs">会改写 ~/.claude/settings.json，把请求转到本机代理。Claude 模型照常走你自己的订阅；关掉客户端时自动恢复。</p>
+      <div class="ans">
+        <button data-a="ob-take-pick" data-v="1"><span class="ai">${ic('power')}</span><div><b>好，现在接管</b><span>默认启用最新的 6 个 Codex 模型</span></div><span class="rec">推荐</span></button>
+        <button data-a="ob-take-pick" data-v="0"><span class="ai">${ic('x')}</span><div><b>先不用</b><span>以后在面板顶部打开开关就行</span></div></button></div>
+      <div class="bottom"><button class="ghost" data-a="ob-back">返回</button></div></div>`;
+  }
+  return `<div class="ob">${dots}<div class="q">开机时自动在后台运行？</div><p class="qs">只在托盘里待着，不弹窗口。</p>
+    <div class="ans">
+      <button data-a="ob-auto-pick" data-v="1"><span class="ai">${ic('boot')}</span><div><b>自动运行</b><span>开机就能直接用 Codex 模型</span></div><span class="rec">推荐</span></button>
+      <button data-a="ob-auto-pick" data-v="0"><span class="ai">${ic('x')}</span><div><b>我自己打开</b><span>没开客户端时 Claude Code 照常用 Claude 模型</span></div></button></div>
+    <div class="bottom"><button class="ghost" data-a="ob-back">返回</button></div></div>`;
+}
+
+// ───────── 外壳与事件 ─────────
+const toastHtml = () => S.toast ? `<div class="toast">${S.toast.spin ? '<span class="spin"></span>' : ic('check', 14)}${esc(S.toast.msg)}</div>` : '';
+function render() {
+  document.getElementById('pick').innerHTML = Object.entries(CONCEPTS).map(([k, c]) => `<button class="${S.concept === k ? 'on' : ''}" data-s="concept" data-v="${k}"><b>${c.name}</b><span>${c.sub}</span></button>`).join('');
+  document.getElementById('view').innerHTML = [['ob', '首次引导'], ['main', '主界面']].map(([k, l]) => `<button class="${S.view === k ? 'on' : ''}" data-s="view" data-v="${k}">${l}</button>`).join('');
+  document.getElementById('scen').innerHTML = SCEN.map(([k, l]) => `<button class="${S.scen === k ? 'on' : ''}" data-s="scen" data-v="${k}">${l}</button>`).join('')
+    + (S.view === 'ob' ? '<button data-s="replay">重新播放引导</button>' : '');
+  document.getElementById('idea').innerHTML = CONCEPTS[S.concept].idea;
+  const focus = document.activeElement?.dataset?.in;
+  const caret = document.activeElement?.selectionStart;
+  const inner = S.concept === 'A' ? renderA() : S.concept === 'B' ? renderB() : renderC();
+  document.getElementById('stage').innerHTML = S.concept === 'C' ? inner
+    : `<div class="win" style="${S.concept === 'B' ? '--tb:#141414;--tbt:#ddd' : '--tb:#f5f4f2'}"><div class="titlebar">${LOGO}<span>CC Bridge</span><span class="sp"></span><i>—</i><i>▢</i><i>✕</i></div>${inner}</div>`;
+  if (focus) { const el = document.querySelector(`[data-in="${focus}"]`); if (el) { el.focus(); try { el.setSelectionRange(caret, caret); } catch {} } }
+}
+
+document.addEventListener('click', (e) => {
+  const s = e.target.closest('[data-s]');
+  if (s) {
+    const v = s.dataset.v;
+    if (s.dataset.s === 'concept') { S.concept = v; S.q = ''; S.drawer = null; S.cClosed = false; if (S.view === 'ob') startOb(); }
+    if (s.dataset.s === 'view') { S.view = v; S.cClosed = false; if (v === 'ob') startOb(); else clearTimers(); }
+    if (s.dataset.s === 'scen') applyScen(v);
+    if (s.dataset.s === 'replay') startOb();
+    return render();
+  }
+  if (S.concept === 'C' && !S.cClosed && e.target.closest('.desk') && !e.target.closest('.C') && !e.target.closest('.tray')) { S.cClosed = true; return render(); }
+  const el = e.target.closest('[data-a]');
+  if (!el || el.disabled) return;
+  const a = el.dataset.a, v = el.dataset.v, o = S.ob;
+  switch (a) {
+    case 'toast': toast(v); break;
+    case 'fix': fixAction(v); break;
+    case 'takeover': S.takeover = !S.takeover; toast(S.takeover ? '已接管，新开的 Claude Code 窗口生效' : '已恢复 Claude Code 原来的配置'); break;
+    case 'model': toggleModel(v); break;
+    case 'm-def': S.sel = new Set(DEFAULT_SEL); break;
+    case 'm-all': S.sel = new Set(MODELS.map((m) => m.id)); break;
+    case 'm-none': S.sel = new Set(); break;
+    case 'm-fold': S.collapsed.has(v) ? S.collapsed.delete(v) : S.collapsed.add(v); break;
+    case 'm-grp': { const ms = MODELS.filter((m) => m.fam === v).map((m) => m.id); const all = ms.every((id) => S.sel.has(id)); ms.forEach((id) => all ? S.sel.delete(id) : S.sel.add(id)); break; }
+    case 'net': testNet(); break;
+    case 'chk-upd': checkUpdate(); break;
+    case 'autostart': S.cfg.autostart = !S.cfg.autostart; S.savedAt = Date.now(); later(1800, () => { S.savedAt = null; }); break;
+    // A
+    case 'a-tab': S.tabA = v; S.q = ''; break;
+    case 'a-feed': S.feedA = v; break;
+    case 'a-power':
+      if (overall()[0] !== 'ok') { const x = issues()[0]; if (x) fixAction(x.acts[0][0]); }
+      else { S.takeover = !S.takeover; toast(S.takeover ? '已接管 Claude Code' : '已恢复 Claude Code 原来的配置'); }
+      break;
+    case 'a-upd': S.aSheet = true; break;
+    case 'a-sheet-close': if (S.upd === null) S.aSheet = false; break;
+    case 'a-upd-go': S.aSheet = true; startUpdate(); break;
+    // B
+    case 'b-tab': S.tabB = v; S.q = ''; S.drawer = null; break;
+    case 'b-filter': S.reqFilter = v; S.drawer = null; break;
+    case 'b-row': S.tabB = 'reqs'; S.drawer = +v; break;
+    case 'b-close': S.drawer = null; break;
+    case 'b-raw': S.rawB = !S.rawB; S.drawer = null; break;
+    case 'b-upd-go': startUpdate(); break;
+    case 'd-auto': S.draft = { ...(S.draft || S.cfg), autostart: !(S.draft || S.cfg).autostart }; break;
+    case 'd-reset': S.draft = null; break;
+    case 'd-save': S.cfg = { ...S.draft }; S.draft = null; S.proxy = 'starting'; toast('已保存，正在重启代理', true); later(1100, () => { S.proxy = 'running'; toast('代理已重启'); }); break;
+    // C
+    case 'c-tray': S.cClosed = !S.cClosed; break;
+    case 'c-focus': S.viewC = 'home'; S.q = ''; render(); document.getElementById('cmdq')?.focus(); return;
+    case 'c-go-logs': S.viewC = 'logs'; S.q = ''; break;
+    case 'c-go-settings': S.viewC = 'settings'; S.q = ''; break;
+    case 'c-go-update': S.viewC = 'update'; S.q = ''; break;
+    case 'c-back': if (S.upd === null) S.viewC = 'home'; break;
+    case 'c-restart': S.q = ''; S.proxy = 'starting'; later(1000, () => { S.proxy = 'running'; toast('代理已重启'); }); break;
+    case 'c-copy': S.q = ''; toast('已复制 6 行日志'); break;
+    case 'c-chk': S.q = ''; checkUpdate(); later(1150, () => { if (S.update) S.viewC = 'update'; }); break;
+    case 'c-upd-go': startUpdate(); break;
+    // 引导
+    case 'ob-fix': obFix(v); break;
+    case 'ob-recheck': o.checks = { cli: 'wait', login: 'wait', net: 'wait', cfg: 'wait' }; runChecks(); break;
+    case 'ob-auto': o.autostart = !o.autostart; break;
+    case 'ob-take': o.takeover = !o.takeover; break;
+    case 'ob-go': o.done = true; S.takeover = true; break;
+    case 'ob-go-noto': o.done = true; S.takeover = false; break;
+    case 'ob-finish': clearTimers(); S.view = 'main'; S.tabA = 'home'; S.tabB = 'overview'; S.viewC = 'home'; S.takeover = o.takeover; toast(o.takeover ? '已接管 Claude Code' : '代理已启动'); break;
+    case 'ob-next': o.step++; o.test = null; break;
+    case 'ob-back': o.step--; o.test = null; break;
+    case 'ob-net': o.netChoice = v; o.test = null; break;
+    case 'ob-test': o.test = 'run'; later(1000, () => { o.test = 'ok'; }); break;
+    case 'ob-model': o.sel.has(v) ? o.sel.delete(v) : o.sel.add(v); S.sel = new Set(o.sel); break;
+    case 'ob-ping': o.test = 'ping'; later(1400, () => { o.test = 'pong'; }); break;
+    case 'ob-net-pick': o.netChoice = v; o.test = 'run'; later(900, () => { o.test = 'ok'; }); later(1500, () => { o.step = 2; o.test = null; }); break;
+    case 'ob-take-pick': o.takeover = v === '1'; o.step = 3; break;
+    case 'ob-auto-pick': o.autostart = v === '1'; o.done = true; break;
+  }
+  render();
+});
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset.in;
+  if (!k) return;
+  const v = e.target.value;
+  if (k === 'q') { S.q = v; S.cur = 0; }
+  else if (k.startsWith('d-')) { S.draft = { ...(S.draft || S.cfg), [k.slice(2)]: v }; }
+  else if (k === 'ob-custom') { S.ob.netCustom = v; return; }
+  else { S.cfg[k] = v; S.net = null; S.savedAt = Date.now(); later(1800, () => { S.savedAt = null; }); }
+  render();
+});
+document.addEventListener('keydown', (e) => {
+  if (S.concept !== 'C' || S.view !== 'main') return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); S.viewC = 'home'; S.cClosed = false; render(); document.getElementById('cmdq')?.focus(); return; }
+  if (!S._items || document.activeElement?.id !== 'cmdq') return;
+  if (e.key === 'ArrowDown') { S.cur = Math.min(S._items.length - 1, S.cur + 1); e.preventDefault(); render(); }
+  if (e.key === 'ArrowUp') { S.cur = Math.max(0, S.cur - 1); e.preventDefault(); render(); }
+  if (e.key === 'Enter') { const it = S._items[S.cur]; if (!it) return; if (it.k === 'm') { toggleModel(it.m.id); render(); } else { document.querySelector(`.C [data-a="${it.a[2]}"]`)?.click(); } }
+  if (e.key === 'Escape') { S.q = ''; render(); }
+});
+// 截图 / 分享用：#A-main-update、#C-ob 这样的地址直接打开对应画面
+(function () {
+  const [c, v, sc, tab] = location.hash.slice(1).split('-');
+  if (c && CONCEPTS[c]) S.concept = c;
+  if (v === 'ob' || v === 'main') S.view = v;
+  if (sc) applyScen(sc);
+  if (tab) { S.tabA = tab; S.tabB = tab; S.viewC = tab; }
+  if (S.view === 'ob') startOb();
+})();
+render();
+</script>
+</body>
+</html>

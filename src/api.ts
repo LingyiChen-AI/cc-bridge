@@ -55,6 +55,26 @@ export interface EnvReport {
   systemProxy: string | null;
 }
 
+/** 一次请求（后端 stats.rs：Activity） */
+export interface Activity {
+  id: string;
+  at: number; // 完成时间，Unix 毫秒
+  model: string;
+  route: 'codex' | 'claude';
+  ok: boolean;
+  httpStatus: number | null;
+  ms: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  error: string | null;
+}
+
+export interface Overview {
+  recent: Activity[];
+  today: { count: number; errors: number; avgMs: number };
+  modelUse: Record<string, number>; // 近 7 天每个模型的调用次数
+}
+
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
 type Listen = (ev: string, cb: (payload: Status) => void) => void;
 
@@ -63,6 +83,7 @@ const real = !!tauri?.core;
 
 export const invoke: Invoke = real ? (cmd, args) => tauri.core.invoke(cmd, args) : mock.invoke;
 export interface UpdateInfo {
+  installing?: boolean;
   version: string;
   current: string;
   notes: string | null;

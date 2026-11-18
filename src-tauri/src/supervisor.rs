@@ -115,6 +115,8 @@ struct Inner {
     hint: Mutex<LogHint>,
     logs: LogBuffer,
     restarts: Mutex<VecDeque<Instant>>,
+    /// 请求监控：代理每处理一个请求都记在这里，统计模块（stats.rs）从这里取数据
+    monitor: crate::proxy::monitor::MonitorHandle,
     generation: AtomicU64,
     on_change: Listener,
 }
@@ -138,6 +140,7 @@ impl Supervisor {
             server: Mutex::new(None),
             models: Mutex::new(vec![]),
             hint: Mutex::new(LogHint::None),
+            monitor: crate::proxy::monitor::MonitorHandle::default(),
             logs: LogBuffer::default(),
             restarts: Mutex::new(VecDeque::new()),
             generation: AtomicU64::new(0),
@@ -191,6 +194,10 @@ impl Supervisor {
     }
 
     /// 同步停止代理服务。
+    pub fn monitor(&self) -> crate::proxy::monitor::MonitorHandle {
+        self.0.monitor.clone()
+    }
+
     pub fn stop(&self) {
         self.0.generation.fetch_add(1, Ordering::SeqCst);
         self.stop_server();
@@ -323,7 +330,7 @@ impl Supervisor {
         let cfg = self.0.cfg.lock().unwrap().clone();
         overrides::set(proxy_overrides(&cfg, &self.0.home));
         let (tx, rx) = tokio::sync::oneshot::channel::<()>();
-        let config = crate::proxy::server::ServerConfig { bind_address: "127.0.0.1".into(), port, monitor: None };
+        let config = crate::proxy::server::ServerConfig { bind_address: "127.0.0.1".into(), port, monitor: Some(self.0.monitor.clone()) };
         let task = self.0.rt.spawn(crate::proxy::server::serve_with_shutdown(config, async {
             let _ = rx.await;
         }));

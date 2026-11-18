@@ -9,6 +9,7 @@ pub mod proxy;
 pub mod shutdown;
 pub mod supervisor;
 pub mod tray;
+pub mod stats;
 pub mod updater;
 
 use auth_status::{AuthState, inspect_auth};
@@ -16,7 +17,7 @@ use config::AppConfig;
 use controller::{Controller, StatusDto};
 use serde::Serialize;
 use std::sync::Arc;
-use tauri::{AppHandle, Manager, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 
@@ -134,6 +135,11 @@ fn app_version(app: AppHandle) -> String {
 }
 
 #[tauri::command]
+fn get_activity(st: State<'_, Arc<stats::Stats>>) -> stats::Overview {
+    st.overview()
+}
+
+#[tauri::command]
 fn get_update(st: State<'_, updater::UpdaterState>) -> Option<updater::UpdateInfo> {
     st.info()
 }
@@ -187,7 +193,21 @@ pub fn run() {
             let handle = app.handle().clone();
             let home = dirs::home_dir().expect("home dir");
             let data_dir = app.path().app_data_dir()?.join(if config::DEV_MODE { "dev" } else { "" });
-            let ctl = Controller::new(handle.clone(), home, data_dir);
+            let ctl = Controller::new(handle.clone(), home, data_dir.clone());
+            // 请求统计：每 2 秒从代理的请求监控收一次，有新请求就推给界面并写盘
+            let stats = Arc::new(stats::Stats::load(data_dir.join("stats.json")));
+            app.manage(stats.clone());
+            {
+                let monitor = ctl.sup.monitor();
+                let h = handle.clone();
+                std::thread::spawn(move || loop {
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if stats.ingest(&monitor) {
+                        let _ = h.emit("activity", stats.overview());
+                        stats.save();
+                    }
+                });
+            }
             let tray = tray::build(&handle, ctl.clone())?;
             ctl.set_status_listener(move |st| tray.update(st));
             if ctl.onboarded() {
@@ -229,6 +249,7 @@ pub fn run() {
             hide_window,
             app_version,
             get_update,
+            get_activity,
             check_update,
             install_update
         ])

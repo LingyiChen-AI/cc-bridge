@@ -51,9 +51,24 @@ const env: EnvReport = {
   systemProxy: 'http://127.0.0.1:7890',
 };
 
+const t0 = Date.now();
+const act = (i: number, model: string, route: 'codex' | 'claude', ok: boolean, ms: number, tin: number, tout: number, status = 200, error: string | null = null) =>
+  ({ id: `r${i}`, at: t0 - i * 47000, model, route, ok, httpStatus: status, ms, inputTokens: tin, outputTokens: tout, error });
+const activity = {
+  recent: [
+    act(0, 'gpt-6.1-sol', 'codex', true, 1840, 12840, 412),
+    act(1, 'claude-opus-5-5', 'claude', true, 948, 9020, 233),
+    act(2, 'gpt-6.1-sol', 'codex', false, 604, 11200, 0, 429, 'The usage limit has been reached'),
+    act(3, 'gpt-6.1-sol-fast', 'codex', true, 1210, 8800, 1290),
+    act(4, 'claude-opus-5-5', 'claude', true, 1057, 7410, 96),
+  ],
+  today: { count: 128, errors: 1, avgMs: 1900 },
+  modelUse: { 'gpt-6.1-sol': 86, 'gpt-6.1-sol-fast': 31, 'gpt-6.1-terra': 12, 'gpt-6-astra': 2 },
+};
+
 export const mock = {
   invoke: async <T,>(cmd: string): Promise<T> => {
-    const r: Record<string, unknown> = { get_status: status, detect_environment: env, test_outbound: 286, refresh_models: models, copy_logs: 3, app_version: '0.1.0', get_update: new URLSearchParams(location.search).has('update') ? { version: '0.2.0', current: '0.1.0', notes: null } : null };
+    const r: Record<string, unknown> = { get_status: status, detect_environment: env, test_outbound: 286, refresh_models: models, copy_logs: 3, app_version: '0.1.0', get_activity: activity, preview_start: null, finish_onboarding: null, set_models: null, set_takeover: null, save_config: null, get_update: new URLSearchParams(location.search).has('update') ? { version: '0.2.0', current: '0.1.0', notes: null } : null };
     return r[cmd] as T;
   },
   listen: () => {},
