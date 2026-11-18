@@ -84,4 +84,5 @@ export const zhTW: Dict = {
   obStartTimeout: "等了 30 秒代理還沒就緒，請確認對外代理可用，或重試。", obDoneTitle: "好了，可以用了", obDoneSub: "開一個新的終端機，啟動 Claude Code，輸入 /model 就能看到 Codex 模型。",
   obDoneNoTake: "代理已在執行。之後在首頁點一下大開關就能接管 Claude Code。", moreN: "… 還有 {n} 個", obEnter: "進入首頁",
   toastTakeOn: "已接管，新開的 Claude Code 視窗生效", toastTakeOff: "已還原 Claude Code 原本的設定",
+  capiTitle: "自己的 Claude API", capiAdd: "新增", capiUrl: "介面位址", capiKey: "API 金鑰", capiKeyKeep: "留空則沿用 {mask}", capiModel: "模型名", capiSave: "驗證並儲存", capiVerify: "重新驗證", capiEdit: "編輯", capiDel: "刪除", capiDelConfirm: "確定刪除這個 API？", capiVerified: "已驗證", capiFailed: "未通過", capiOk: "驗證通過，已儲存", capiCancel: "取消", capiStep_auth: "認證", capiStep_format: "回應格式", capiStep_tokenizer: "分詞器", capiStep_signature: "思考簽章", capiStep_modelName: "模型名", capiHint: "只能接入真正的 Claude。Qwen、DeepSeek 等「Claude 相容介面」會在驗證時被拒絕。", routeApi: "自己的 API",
 };

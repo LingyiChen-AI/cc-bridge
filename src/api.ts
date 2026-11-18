@@ -43,6 +43,7 @@ export interface Status {
   onboarded: boolean;
   devMode: boolean;
   lang: string;
+  customApis: CustomApiDto[];
 }
 
 export interface EnvReport {
@@ -96,3 +97,10 @@ export const onEvent = <T,>(ev: string, cb: (payload: T) => void) => {
 export const onStatus: Listen = real
   ? (ev, cb) => void tauri.event.listen(ev, (e: { payload: Status }) => cb(e.payload))
   : mock.listen;
+
+// ───────── 自己的 Claude API（后端 custom_apis.rs / proxy/custom_api/verify.rs） ─────────
+export interface CustomApiDto { id: string; baseUrl: string; keyMask: string; model: string; pickerName: string | null; verifiedAt: number | null }
+export type StepId = 'auth' | 'format' | 'tokenizer' | 'signature' | 'modelName';
+export type StepResult = { kind: 'pass' } | { kind: 'skip'; reason: string } | { kind: 'fail'; reason: string };
+export interface VerifyReport { steps: [StepId, StepResult][]; authStyle: 'x_api_key' | 'bearer' | null; ok: boolean }
+export interface CustomApiStepEvent { id: string; step: StepId; result: StepResult }

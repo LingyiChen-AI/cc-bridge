@@ -1,8 +1,9 @@
 // 界面：方案 A「一键开关」——主页一个大开关 + 底部四个标签（主页 / 模型 / 动态 / 设置）；首次引导是一页自动检测 + 一键接管。
-import { invoke, onEvent, onStatus, type Activity, type AppConfig, type AuthState, type EnvReport, type Overview, type Status, type UpdateInfo } from './api';
+import { invoke, onEvent, onStatus, type Activity, type AppConfig, type AuthState, type EnvReport, type CustomApiDto, type CustomApiStepEvent, type Overview, type Status, type StepId, type StepResult, type UpdateInfo, type VerifyReport } from './api';
 import { icon } from './icons';
 import { LANGS, setLang, t, trError } from './i18n';
 import { toast } from './toast';
+import { mockStep } from './mock';
 import { anySelectOpen, installSelects, renderSelect, selectValue } from './select';
 
 type Tone = 'ok' | 'warn' | 'err';
@@ -26,6 +27,11 @@ let updatePct: number | null = null;
 let sheetOpen = false;
 let checking = false;
 let activity: Overview | null = null;
+
+// 「自己的 Claude API」弹窗状态；密钥只存在这里（内存）和输入框里，不显示、不记录
+interface CapiForm { id: string | null; mask: string; url: string; key: string; model: string; running: boolean; steps: Partial<Record<StepId, StepResult>>; error: string | null; failed: boolean }
+const CAPI_STEPS: StepId[] = ['auth', 'format', 'tokenizer', 'signature', 'modelName'];
+let capi: CapiForm | null = null;
 
 let tab: Tab = 'home';
 let feedMode: 'req' | 'raw' = 'req';
@@ -120,7 +126,7 @@ function renderMain(s: Status) {
     <main class="body" id="body">${body}</main>
     <nav class="tabs" role="tablist">${tabs.map(([k, ic, l]) => `<button role="tab" aria-selected="${tab === k}" class="${tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${ic}<span>${l}</span>${
       k === 'feed' && newErrors() ? '<i class="badge"></i>' : k === 'settings' && update ? '<i class="badge acc"></i>' : ''}</button>`).join('')}</nav>
-    ${sheetOpen && update ? updateSheet(update) : ''}`;
+    ${sheetOpen && update ? updateSheet(update) : ''}${capi ? capiSheet(capi) : ''}`;
   const logs = document.getElementById('logs');
   if (logs) logs.scrollTop = logs.scrollHeight;
 }
@@ -184,14 +190,71 @@ function modelsTab(s: Status) {
           <span class="meta">${use[m] ? t('use7d', { n: use[m] }) : t('neverUsed')}</span>${sw(sel.has(m), 'model', m, `data-model="${esc(m)}"`)}</div>`).join('')}
       </section>`;
     }).join('')}
+    ${capiSection(s)}
     <p class="foot-note">${t('modelsFoot')}</p>`;
+}
+
+function hostOf(u: string) { try { return new URL(u).host; } catch { return u; } }
+
+function capiSection(s: Status) {
+  const rows = (s.customApis ?? []).map((c: CustomApiDto) => {
+    const ok = c.verifiedAt !== null;
+    return `<div class="crow"><div class="ci"><div class="cm"><span class="name">${esc(c.pickerName ?? `API ${c.model}`)}</span><span class="cbadge ${ok ? 'ok' : 'bad'}">${ok ? icon.check(11) : icon.close(11)}${t(ok ? 'capiVerified' : 'capiFailed')}</span></div>
+      <div class="cs" title="${esc(c.baseUrl)}">${esc(hostOf(c.baseUrl))} · ${esc(c.keyMask)}</div></div>
+      <div class="ca"><button data-act="capi-verify" data-id="${esc(c.id)}">${t('capiVerify')}</button><button data-act="capi-edit" data-id="${esc(c.id)}">${t('capiEdit')}</button><button class="del" data-act="capi-del" data-id="${esc(c.id)}">${t('capiDel')}</button></div></div>`;
+  }).join('');
+  return `<section class="capi"><div class="capi-h"><b>${t('capiTitle')}</b><button class="btn sm" data-act="capi-add">+ ${t('capiAdd')}</button></div>
+    <p class="capi-hint">${t('capiHint')}</p>${rows}</section>`;
+}
+
+function capiSheet(f: CapiForm) {
+  const lock = f.running ? 'disabled' : '';
+  const first = CAPI_STEPS.find((id) => !f.steps[id]);
+  const showSteps = f.running || Object.keys(f.steps).length > 0;
+  const stepRow = (id: StepId) => {
+    const r = f.steps[id];
+    const mark = r ? (r.kind === 'pass' ? `<i class="sm ok">${icon.check(13)}</i>` : r.kind === 'fail' ? `<i class="sm bad">${icon.close(13)}</i>` : '<i class="sm skip">–</i>')
+      : f.running && id === first ? '<i class="sm"><span class="spinner"></span></i>' : '<i class="sm idle"></i>';
+    const why = r && r.kind !== 'pass' ? `<div class="why ${r.kind}">${esc(r.reason)}</div>` : '';
+    return `<li class="${r ? r.kind : ''}">${mark}<div><span>${t(`capiStep_${id}` as const)}</span>${why}</div></li>`;
+  };
+  return `<div class="mask" data-act="capi-close"></div>
+    <div class="sheet capi-sheet" role="dialog" aria-modal="true" aria-label="${esc(t('capiTitle'))}"><div class="grab"></div>
+      <h3>${t('capiTitle')}</h3>
+      <p class="capi-hint">${t('capiHint')}</p>
+      <label class="fld"><span>${t('capiUrl')}</span><input class="v" id="capi-url" data-in="capi-url" placeholder="https://api.anthropic.com" value="${esc(f.url)}" ${lock} autocomplete="off" spellcheck="false"></label>
+      <label class="fld"><span>${t('capiKey')}</span><input class="v" id="capi-key" type="password" data-in="capi-key" placeholder="${esc(f.id && f.mask ? t('capiKeyKeep', { mask: f.mask }) : 'sk-ant-…')}" value="${esc(f.key)}" ${lock} autocomplete="off" spellcheck="false"></label>
+      <label class="fld"><span>${t('capiModel')}</span><input class="v" id="capi-model" data-in="capi-model" placeholder="claude-opus-5-5" value="${esc(f.model)}" ${lock} autocomplete="off" spellcheck="false"></label>
+      ${f.error ? `<div class="capi-err">${esc(f.error)}</div>` : ''}
+      ${showSteps ? `<ul class="steps">${CAPI_STEPS.map(stepRow).join('')}</ul>` : ''}
+      <div class="sheet-acts"><button class="btn" data-act="capi-close" ${f.running ? 'disabled' : ''}>${t('capiCancel')}</button>
+        <button class="btn pri grow" data-act="capi-save" ${lock}>${f.running ? '<span class="spinner"></span> ' : ''}${t('capiSave')}</button></div></div>`;
+}
+
+async function capiRun(verifyId: string | null) {
+  if (!capi) return;
+  const f = capi;
+  f.running = true; f.steps = {}; f.error = null; f.failed = false; render();
+  try {
+    const rep = verifyId
+      ? await invoke<VerifyReport>('reverify_custom_api', { id: verifyId })
+      : await invoke<VerifyReport>('save_custom_api', { input: { id: f.id, baseUrl: f.url.trim(), apiKey: f.key.trim() || null, model: f.model.trim() } });
+    if (capi !== f) return;
+    for (const [id, r] of rep.steps) f.steps[id] = r;
+    f.running = false;
+    if (rep.ok) { capi = null; toast(t('capiOk')); } else f.failed = true;
+  } catch (e) {
+    f.running = false; f.error = String(e).replace(/^Error:\s*/, '');
+  }
+  status = await invoke<Status>('get_status').catch(() => status);
+  render();
 }
 
 function reqLine(r: Activity) {
   const why = r.ok ? null : r.httpStatus === 429 ? t('err429') : r.httpStatus === 401 ? t('err401') : r.httpStatus && r.httpStatus >= 500 ? t('err5xx') : (r.error ?? t('errOther'));
   const tokens = r.inputTokens != null || r.outputTokens != null ? t('tokensInOut', { in: (r.inputTokens ?? 0).toLocaleString(), out: (r.outputTokens ?? 0).toLocaleString() }) : '';
   return `<div class="req ${r.ok ? '' : 'bad'}">
-    <div class="rl"><div><span class="m">${esc(r.model)}</span> <span class="route ${r.route}">${r.route === 'codex' ? 'Codex' : t('routeClaude')}</span></div>
+    <div class="rl"><div><span class="m">${esc(r.model)}</span> <span class="route ${r.route}">${r.route === 'codex' ? 'Codex' : r.route === 'api' ? t('routeApi') : t('routeClaude')}</span></div>
       <div class="sub" title="${esc(r.error ?? '')}">${esc(why ?? tokens)}</div></div>
     <div class="st"><div>${r.ok ? fmtSec(r.ms) : (r.httpStatus ?? '!')}</div><div class="sub">${fmtClock(r.at)}</div></div></div>`;
 }
@@ -517,6 +580,22 @@ async function act(name: string, el: HTMLElement): Promise<void> {
         } catch (e) { toast(t('toastCheckFail', { detail: String(e) }), 'error'); }
         checking = false; render();
         break;
+      case 'capi-add': capi = { id: null, mask: '', url: '', key: '', model: '', running: false, steps: {}, error: null, failed: false }; render(); break;
+      case 'capi-edit': {
+        const c = s.customApis.find((x) => x.id === el.dataset.id);
+        if (c) { capi = { id: c.id, mask: c.keyMask, url: c.baseUrl, key: '', model: c.model, running: false, steps: {}, error: null, failed: false }; render(); }
+        break;
+      }
+      case 'capi-verify': {
+        const c = s.customApis.find((x) => x.id === el.dataset.id);
+        if (c) { capi = { id: c.id, mask: c.keyMask, url: c.baseUrl, key: '', model: c.model, running: false, steps: {}, error: null, failed: false }; await capiRun(c.id); }
+        break;
+      }
+      case 'capi-save': await capiRun(null); break;
+      case 'capi-close': if (capi && !capi.running) { capi = null; render(); } break;
+      case 'capi-del':
+        if (confirm(t('capiDelConfirm'))) { await invoke('delete_custom_api', { id: el.dataset.id }); status = await invoke<Status>('get_status'); render(); }
+        break;
       case 'open-sheet': sheetOpen = true; render(); break;
       case 'close-sheet': if (updatePct === null) { sheetOpen = false; render(); } break;
       case 'install-update':
@@ -552,6 +631,9 @@ app.addEventListener('input', (e) => {
   const el = e.target as HTMLInputElement;
   if (el.dataset.in === 'q') { query = el.value; render(); }
   if (el.id === 'f-proxy') netTest = null;
+  if (capi && el.dataset.in === 'capi-url') capi.url = el.value;
+  if (capi && el.dataset.in === 'capi-key') capi.key = el.value;
+  if (capi && el.dataset.in === 'capi-model') capi.model = el.value;
 });
 // 设置项：输入框失焦 / 回车（change 事件）时自动保存；端口不合法不保存
 app.addEventListener('change', (e) => {
@@ -583,6 +665,7 @@ onStatus('status-changed', (s) => {
 
 installSelects();
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && capi && !capi.running) { capi = null; render(); return; }
   if (e.key === 'Escape' && sheetOpen && updatePct === null && !anySelectOpen()) { sheetOpen = false; render(); }
 });
 onEvent<UpdateInfo | null>('update-available', (u) => { update = u; if (status?.onboarded && shouldRerender()) render(); });
@@ -594,6 +677,13 @@ onEvent<number>('update-progress', (p) => {
     const txt = document.querySelector('.prog');
     if (txt) txt.textContent = p >= 100 ? t('updInstalling') : t('updDownloading', { pct: p });
   } else if (shouldRerender()) render();
+});
+onEvent<CustomApiStepEvent>('custom-api-step', (ev) => {
+  if (!capi || !capi.running) return;
+  if (!capi.id) capi.id = ev.id; // 新条目校验失败时后端也会存下来；记住 id，同一弹窗里重试不会产生重复条目
+  else if (capi.id !== ev.id) return;
+  capi.steps[ev.step] = ev.result;
+  render();
 });
 onEvent<Overview>('activity', (o) => {
   activity = o;
@@ -613,6 +703,12 @@ onEvent<Overview>('activity', (o) => {
   if (q.has('mock') && q.get('feed') === 'raw') feedMode = 'raw';
   if (q.has('mock') && q.has('sheet')) sheetOpen = true;
   if (q.has('mock') && q.has('err')) seenErrAt = 0;
+  const cp = q.has('mock') ? q.get('capi') : null; // 预览：progress = 校验中途，fail = 失败态，edit = 编辑态
+  if (cp) {
+    const c = status.customApis[cp === 'edit' ? 0 : 1];
+    capi = { id: cp === 'edit' ? c.id : null, mask: c.keyMask, url: c.baseUrl, key: '', model: c.model, running: cp === 'progress', steps: {}, error: null, failed: cp === 'fail' };
+    if (cp === 'progress') capi.steps = Object.fromEntries(mockStep(3, false)); else if (cp === 'fail') capi.steps = Object.fromEntries(mockStep(3, true));
+  }
   render();
   if (!status.onboarded) await loadEnv();
 })();
