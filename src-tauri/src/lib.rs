@@ -2,6 +2,7 @@ pub mod auth_status;
 pub mod claude_settings;
 pub mod config;
 pub mod controller;
+pub mod custom_apis;
 pub mod i18n;
 pub mod log_buffer;
 pub mod platform;
@@ -155,6 +156,23 @@ async fn install_update(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+async fn save_custom_api(ctl: Ctl<'_>, input: custom_apis::CustomApiInput) -> Result<proxy::custom_api::verify::VerifyReport, String> {
+    let c = ctl.inner().clone();
+    c.save_custom_api(input).await
+}
+
+#[tauri::command]
+async fn reverify_custom_api(ctl: Ctl<'_>, id: String) -> Result<proxy::custom_api::verify::VerifyReport, String> {
+    let c = ctl.inner().clone();
+    c.reverify_custom_api(id).await
+}
+
+#[tauri::command]
+fn delete_custom_api(ctl: Ctl, id: String) -> Result<(), String> {
+    ctl.delete_custom_api(&id)
+}
+
+#[tauri::command]
 fn hide_window(app: AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.hide();
@@ -251,7 +269,10 @@ pub fn run() {
             get_update,
             get_activity,
             check_update,
-            install_update
+            install_update,
+            save_custom_api,
+            reverify_custom_api,
+            delete_custom_api
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

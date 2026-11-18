@@ -60,6 +60,15 @@ fn str_at<'a>(v: &'a Value, path: &[&str]) -> Option<&'a str> {
 }
 
 pub fn model_entry(id: &str) -> Value {
+    if let Some(rest) = id.strip_prefix("api-") {
+        return match crate::proxy::custom_api::lookup(id) {
+            Some(e) => {
+                let host = e.base_url.split("://").nth(1).unwrap_or(&e.base_url).split('/').next().unwrap_or("");
+                json!({ "model": id, "label": format!("API {}", e.model), "description": format!("自己的 API · {host}") })
+            }
+            None => json!({ "model": id, "label": format!("API {rest}"), "description": "自己的 API" }),
+        };
+    }
     json!({ "model": id, "label": format!("Codex {id}"), "description": "ChatGPT subscription" })
 }
 
@@ -281,5 +290,40 @@ mod tests {
         let p = dir.path().join("nested").join(".claude").join("settings.json");
         write_settings(&p, &json!({"a":1})).unwrap();
         assert_eq!(read_settings(&p).unwrap(), json!({"a":1}));
+    }
+
+    #[test]
+    fn api_entry_label_and_description() {
+        use crate::proxy::custom_api::{AuthStyle, CustomApi, TEST_LOCK, set_entries};
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_entries(vec![CustomApi {
+            id: "x".into(),
+            base_url: "https://relay.example.com".into(),
+            api_key: "k".into(),
+            model: "claude-opus-5-5".into(),
+            auth_style: AuthStyle::XApiKey,
+            verified_at: Some(1),
+        }]);
+        assert_eq!(
+            model_entry("api-claude-opus-5-5"),
+            json!({"model":"api-claude-opus-5-5","label":"API claude-opus-5-5","description":"自己的 API · relay.example.com"})
+        );
+        set_entries(vec![]);
+        assert_eq!(
+            model_entry("api-claude-opus-5-5"),
+            json!({"model":"api-claude-opus-5-5","label":"API claude-opus-5-5","description":"自己的 API"})
+        );
+        assert_eq!(model_entry("gpt-a")["label"], "Codex gpt-a");
+    }
+
+    #[test]
+    fn revoke_restores_model_when_api_entry_selected() {
+        let mut doc = json!({"model":"opus"});
+        let mut rec = TakeoverRecord::default();
+        apply_takeover(&mut doc, &mut rec, URL, &models(&["gpt-6.2-sol", "api-claude-opus-5-5"]));
+        doc["model"] = json!("api-claude-opus-5-5");
+        revoke_takeover(&mut doc, &mut rec);
+        assert_eq!(doc["model"], "opus");
+        assert!(doc.get("modelPicker").is_none());
     }
 }

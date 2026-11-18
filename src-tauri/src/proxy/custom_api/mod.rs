@@ -62,6 +62,9 @@ pub fn validate_model(model: &str) -> Result<(), String> {
 /// 去首尾空白、结尾 `/`、结尾 `/v1`；必须以 http:// 或 https:// 开头。
 pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     let mut url = raw.trim().trim_end_matches('/');
+    if let Some(stripped) = url.strip_suffix("/v1/messages") {
+        url = stripped.trim_end_matches('/');
+    }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Base URL 必须以 http:// 或 https:// 开头".into());
     }
@@ -157,6 +160,8 @@ mod tests {
             "https://api.x.com/",
             "https://api.x.com/v1",
             " https://api.x.com/v1/ ",
+            "https://api.x.com/v1/messages",
+            "https://api.x.com/v1/messages/",
         ] {
             assert_eq!(normalize_base_url(raw).unwrap(), "https://api.x.com");
         }

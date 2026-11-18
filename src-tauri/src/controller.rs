@@ -3,6 +3,8 @@ use crate::{
     auth_status::{AuthState, auth_file, inspect_auth},
     claude_settings::{SettingsError, apply_takeover, has_leftover, is_taken_over, read_settings, revoke_takeover, write_settings},
     config::{AppConfig, TakeoverRecord, load_json, save_json},
+    custom_apis::{CustomApiDto, CustomApiInput, merge_edit, new_id, validate_key},
+    proxy::custom_api::{self, AuthStyle, CustomApi, verify::{VerifyReport, verify}},
     supervisor::{LogHint, ProxyState, Supervisor},
 };
 use serde::Serialize;
@@ -35,6 +37,19 @@ pub struct StatusDto {
     pub onboarded: bool,
     pub dev_mode: bool,
     pub lang: String,
+    pub custom_apis: Vec<CustomApiDto>,
+}
+
+/// 接管写入 settings.json 的模型：Codex 模型在前，自定义 API 在后。
+pub(crate) fn takeover_models(selected_codex: Vec<String>, custom: Vec<String>) -> Vec<String> {
+    let mut v = selected_codex;
+    v.extend(custom);
+    v
+}
+
+/// 是否应当接管：Codex 模型和自定义 API 任一非空即可。
+pub(crate) fn want_takeover(onboarded: bool, takeover: bool, running: bool, codex_empty: bool, custom_empty: bool) -> bool {
+    onboarded && takeover && running && !(codex_empty && custom_empty)
 }
 
 pub struct Controller {
@@ -42,6 +57,7 @@ pub struct Controller {
     pub sup: Supervisor,
     home: PathBuf,
     data_dir: PathBuf,
+    custom: Mutex<Vec<CustomApi>>,
     cfg: Mutex<AppConfig>,
     rec: Mutex<TakeoverRecord>,
     onboarded: AtomicBool,
@@ -62,6 +78,8 @@ impl Controller {
         let onboarded = cfg_path.exists();
         let cfg: AppConfig = load_json(&cfg_path);
         let rec: TakeoverRecord = load_json(&data_dir.join("takeover.json"));
+        let custom = crate::custom_apis::load(&data_dir);
+        custom_api::set_entries(custom.clone());
         let (tx, rx) = mpsc::channel::<()>();
         let tx2 = tx.clone();
         let sup = Supervisor::new(home.clone(), cfg.clone(), move || {
@@ -72,6 +90,7 @@ impl Controller {
             sup,
             home,
             data_dir,
+            custom: Mutex::new(custom),
             cfg: Mutex::new(cfg),
             rec: Mutex::new(rec),
             onboarded: AtomicBool::new(onboarded),
@@ -165,8 +184,15 @@ impl Controller {
         let cfg = self.config();
         let state = self.sup.state();
         let available = self.sup.models();
-        let models = cfg.effective_models(&available);
-        let want = self.onboarded() && cfg.takeover && state == ProxyState::Running && !available.is_empty();
+        let custom_names = custom_api::picker_list();
+        let want = want_takeover(
+            self.onboarded(),
+            cfg.takeover,
+            state == ProxyState::Running,
+            available.is_empty(),
+            custom_names.is_empty(),
+        );
+        let models = takeover_models(cfg.effective_models(&available), custom_names);
         let failed = matches!(state, ProxyState::Failed { .. });
         if want {
             self.apply_now(&models);
@@ -271,8 +297,86 @@ impl Controller {
             logs_tail: self.sup.logs_tail(200),
             onboarded: self.onboarded(),
             dev_mode: crate::config::DEV_MODE,
-
+            custom_apis: crate::custom_apis::to_dtos(&self.custom.lock().unwrap()),
         }
+    }
+
+    /// 写盘、更新代理路由表并触发一次 reconcile。
+    fn commit_custom(&self, v: Vec<CustomApi>) -> Result<(), String> {
+        crate::custom_apis::save(&self.data_dir, &v).map_err(|e| format!("保存自定义 API 失败：{e}"))?;
+        custom_api::set_entries(v.clone());
+        *self.custom.lock().unwrap() = v;
+        self.notify();
+        Ok(())
+    }
+
+    async fn run_verify(&self, c: &CustomApi) -> VerifyReport {
+        let client = custom_api::provider::build_client();
+        verify(&client, &c.base_url, &c.api_key, &c.model, |s, r| {
+            let _ = self.app.emit("custom-api-step", serde_json::json!({ "id": c.id, "step": s, "result": r }));
+        })
+        .await
+    }
+
+    pub async fn save_custom_api(&self, input: CustomApiInput) -> Result<VerifyReport, String> {
+        let base_url = custom_api::normalize_base_url(&input.base_url)?;
+        let model = input.model.trim().to_string();
+        custom_api::validate_model(&model)?;
+        let existing = self.custom.lock().unwrap().clone();
+        let old = input.id.as_ref().and_then(|id| existing.iter().find(|e| &e.id == id)).cloned();
+        let typed = input.api_key.as_deref().map(str::trim).unwrap_or("");
+        let api_key = if typed.is_empty() {
+            match &old {
+                Some(o) => o.api_key.clone(),
+                None => return Err("请填写 API Key".into()),
+            }
+        } else {
+            validate_key(typed)?;
+            typed.to_string()
+        };
+        let mut cand = CustomApi {
+            id: input.id.clone().unwrap_or_else(new_id),
+            base_url,
+            api_key,
+            model,
+            auth_style: old.as_ref().map(|o| o.auth_style.clone()).unwrap_or(AuthStyle::XApiKey),
+            verified_at: None,
+        };
+        let report = self.run_verify(&cand).await;
+        if report.ok {
+            cand.verified_at = Some(now() as u64);
+            if let Some(a) = report.auth_style.clone() {
+                cand.auth_style = a;
+            }
+        }
+        // 校验期间可能有其它增删，这里重新取当前列表再合并
+        let current = self.custom.lock().unwrap().clone();
+        self.commit_custom(merge_edit(&current, cand, report.ok))?;
+        Ok(report)
+    }
+
+    pub async fn reverify_custom_api(&self, id: String) -> Result<VerifyReport, String> {
+        let entry = self.custom.lock().unwrap().iter().find(|e| e.id == id).cloned().ok_or_else(|| "该条目已不存在".to_string())?;
+        let report = self.run_verify(&entry).await;
+        let mut v = self.custom.lock().unwrap().clone();
+        if let Some(e) = v.iter_mut().find(|e| e.id == id) {
+            if report.ok {
+                e.verified_at = Some(now() as u64);
+                if let Some(a) = report.auth_style.clone() {
+                    e.auth_style = a;
+                }
+            } else {
+                e.verified_at = None;
+            }
+        }
+        self.commit_custom(v)?;
+        Ok(report)
+    }
+
+    pub fn delete_custom_api(&self, id: &str) -> Result<(), String> {
+        let mut v = self.custom.lock().unwrap().clone();
+        v.retain(|e| e.id != id);
+        self.commit_custom(v)
     }
 
     pub fn publish(&self) {
@@ -343,5 +447,41 @@ impl Controller {
         }
         self.revoke_now();
         self.sup.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::proxy::custom_api::AuthStyle;
+
+    fn api(id: &str, verified: Option<u64>) -> CustomApi {
+        CustomApi {
+            id: id.into(),
+            base_url: "https://relay.example.com".into(),
+            api_key: "k".into(),
+            model: "claude-opus-5-5".into(),
+            auth_style: AuthStyle::XApiKey,
+            verified_at: verified,
+        }
+    }
+
+    #[test]
+    fn takeover_with_only_custom_apis() {
+        let v = |xs: &[&str]| xs.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(takeover_models(vec![], v(&["api-a"])), v(&["api-a"]));
+        assert_eq!(takeover_models(v(&["gpt-a"]), v(&["api-a"])), v(&["gpt-a", "api-a"]));
+        assert!(want_takeover(true, true, true, true, false));
+        assert!(!want_takeover(true, true, true, true, true));
+        assert!(want_takeover(true, true, true, false, true));
+        assert!(!want_takeover(false, true, true, false, false));
+        assert!(!want_takeover(true, false, true, false, false));
+        assert!(!want_takeover(true, true, false, false, false));
+    }
+
+    #[test]
+    fn merge_edit_via_controller_module() {
+        let existing = vec![api("a", Some(1))];
+        assert_eq!(crate::custom_apis::merge_edit(&existing, api("a", None), false), existing);
     }
 }
