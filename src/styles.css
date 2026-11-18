@@ -242,8 +242,10 @@ button { cursor: pointer; }
 /* 设置面板：版本号与检查更新 */
 .row.ver { align-items: center; justify-content: space-between; color: var(--text-3); font-size: 12px; margin-top: 4px; }
 .top .btn.icon { margin-right: -6px; color: var(--text-2); }
-.modal-mask { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.32); display: flex; align-items: center; justify-content: center; padding: 16px; animation: mask-in 140ms ease-out; }
-.modal { width: 100%; max-width: 440px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 16px; display: flex; flex-direction: column; box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.35); animation: modal-in 160ms cubic-bezier(.2, .8, .3, 1); }
+.modal-mask { position: fixed; inset: 0; z-index: 40; background: rgba(0, 0, 0, 0.32); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.modal { width: 100%; max-width: 440px; background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 16px; display: flex; flex-direction: column; box-shadow: 0 20px 48px -12px rgba(0, 0, 0, 0.35); }
+.modal-mask.enter { animation: mask-in 140ms ease-out; }
+.modal-mask.enter .modal { animation: modal-in 160ms cubic-bezier(.2, .8, .3, 1); }
 .modal-h { display: flex; align-items: center; margin: -2px -6px 12px 0; }
 .modal-h b { font-size: 14px; font-weight: 600; }
 .modal-h .grow { flex: 1; }

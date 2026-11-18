@@ -63,6 +63,7 @@ const LOGO = `<svg class="logo" viewBox="0 0 100 100" aria-hidden="true"><rect x
 <rect x="72" y="62" width="10" height="8" rx="3" fill="#D97757"/></svg>`;
 
 let settingsOpen = false;
+let settingsEnter = false; // 仅打开弹窗那次播放入场动画
 let modelsExpanded = false;
 const MODEL_PREVIEW = 8;
 
@@ -175,7 +176,7 @@ function mountSettings(cfg: AppConfig) {
   const dirty = settingsDraft && JSON.stringify(settingsDraft) !== JSON.stringify(cfg);
   const langOptions = [{ value: '', label: t('langAuto') }, ...LANGS.map((l) => ({ value: l.code, label: l.name }))];
   slot.outerHTML = `
-    <div class="modal-mask" id="settings-mask">
+    <div class="modal-mask${settingsEnter ? ' enter' : ''}" id="settings-mask">
     <section class="modal" id="settings" role="dialog" aria-modal="true" aria-label="${t('settings')}">
       <div class="modal-h"><b>${t('settings')}</b><span class="grow"></span>
         <button class="btn ghost icon" data-act="close-settings" title="${t('cancel')}" aria-label="${t('cancel')}">${icon.close(16)}</button></div>
@@ -198,6 +199,7 @@ function mountSettings(cfg: AppConfig) {
         <button class="btn pri" data-act="settings-save">${t('saveApply')}</button>
       </div>
     </section></div>`;
+  settingsEnter = false;
   const el = document.getElementById('settings')!;
   const onInput = () => {
     settingsDraft = readForm(cfg);
@@ -344,7 +346,7 @@ async function act(name: string, target: HTMLElement) {
       case 'models-none': await invoke('set_models', { models: [] }); break;
       case 'models-default': await invoke('set_models', { models: null }); break;
       case 'models-more': modelsExpanded = !modelsExpanded; render(); break;
-      case 'open-settings': settingsOpen = true; settingsDraft = null; render(); break;
+      case 'open-settings': settingsOpen = true; settingsEnter = true; settingsDraft = null; render(); break;
       case 'close-settings': closeSettings(); break;
       case 'copy-logs': { const n = await invoke<number>('copy_logs'); toast(t('toastCopiedLogs', { n })); break; }
       case 'settings-reset': closeSettings(); break;
