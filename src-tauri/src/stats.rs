@@ -103,7 +103,11 @@ fn to_activity(r: &CompletedRequest) -> Activity {
             .unwrap_or(0),
         // 监控里映射过的模型记成「请求的 → 实际的」，统计按 Claude Code 里选的那个（箭头前）
         model: r.model.as_deref().and_then(|m| m.split(" → ").next()).unwrap_or_default().to_string(),
-        route: if r.provider.as_deref() == Some("anthropic") { "claude" } else { "codex" },
+        route: match r.provider.as_deref() {
+            Some("anthropic") => "claude",
+            Some("custom-api") => "api",
+            _ => "codex",
+        },
         ok,
         http_status: r.http_status,
         ms: r.latency.as_millis() as u64,

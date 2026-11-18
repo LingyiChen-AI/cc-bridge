@@ -1,5 +1,7 @@
 //! 自定义 Claude API：用户自带 base URL / key / model，在 Claude Code `/model` 里显示为 `api-<model>`。
 //! 本模块只含数据模型、校验规则与进程内全局路由表（客户端经 `set_entries` 整体替换）。
+pub mod provider;
+
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
 
@@ -12,7 +14,7 @@ pub enum AuthStyle {
     Bearer,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, PartialEq)]
 pub struct CustomApi {
     pub id: String,
     pub base_url: String,
@@ -20,6 +22,20 @@ pub struct CustomApi {
     pub model: String,
     pub auth_style: AuthStyle,
     pub verified_at: Option<u64>,
+}
+
+/// 手写 Debug：key 只以掩码形式出现，避免经 `{:?}` 泄漏进日志。
+impl std::fmt::Debug for CustomApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CustomApi")
+            .field("id", &self.id)
+            .field("base_url", &self.base_url)
+            .field("api_key", &mask_key(&self.api_key))
+            .field("model", &self.model)
+            .field("auth_style", &self.auth_style)
+            .field("verified_at", &self.verified_at)
+            .finish()
+    }
 }
 
 /// 选择器名 -> 条目，只含已验证的条目。

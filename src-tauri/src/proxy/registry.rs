@@ -58,6 +58,10 @@ impl Registry {
             };
             handlers.insert(name.clone(), handler);
         }
+        handlers.insert(
+            "custom-api".into(),
+            Arc::new(crate::proxy::custom_api::provider::CustomApiProvider::new()),
+        );
 
         Self {
             alias_provider,
@@ -148,6 +152,9 @@ impl Registry {
         raw_model: &str,
         session_affinity: Option<&AliasProvider>,
     ) -> Option<Arc<dyn Provider>> {
+        if crate::proxy::custom_api::lookup(raw_model).is_some() {
+            return self.handlers.get("custom-api").cloned();
+        }
         let normalized = normalize_incoming_model(raw_model);
         // Claude-shaped models always resolve to the configured alias target (the
         // Anthropic passthrough by default). Session affinity is deliberately NOT

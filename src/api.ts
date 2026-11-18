@@ -60,7 +60,7 @@ export interface Activity {
   id: string;
   at: number; // 完成时间，Unix 毫秒
   model: string;
-  route: 'codex' | 'claude';
+  route: 'codex' | 'claude' | 'api';
   ok: boolean;
   httpStatus: number | null;
   ms: number;

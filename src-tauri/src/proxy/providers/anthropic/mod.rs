@@ -35,7 +35,7 @@ use crate::proxy::registry::ANTHROPIC_STYLE_ALIASES;
 ///
 /// Returns rewritten bytes only when something changed; `None` forwards the body
 /// verbatim, keeping the byte-identical cache prefix for pure-Anthropic conversations.
-fn sanitize_anthropic_request(raw: &[u8], req_id: &str) -> Option<Vec<u8>> {
+pub(crate) fn sanitize_anthropic_request(raw: &[u8], req_id: &str) -> Option<Vec<u8>> {
     let mut doc: Value = serde_json::from_slice(raw).ok()?;
     let obj = doc.as_object_mut()?;
 
@@ -133,7 +133,7 @@ fn detect_hosted_web_search_regression(obj: &serde_json::Map<String, Value>, req
 /// `accept-encoding` is dropped so the upstream answers with an identity encoding
 /// (this build of reqwest does not decompress, so forwarding a compressed body under a
 /// stale `content-encoding` would corrupt it). The proxy's own token never leaves it.
-fn is_stripped_request_header(name: &str) -> bool {
+pub(crate) fn is_stripped_request_header(name: &str) -> bool {
     matches!(
         name,
         "host"
@@ -154,7 +154,7 @@ fn is_stripped_request_header(name: &str) -> bool {
 /// Response headers that must not be relayed back to Claude Code. Hop-by-hop and
 /// framing headers are re-derived by axum for the streamed body; `content-encoding`
 /// is dropped for symmetry with the identity request above.
-fn is_stripped_response_header(name: &str) -> bool {
+pub(crate) fn is_stripped_response_header(name: &str) -> bool {
     matches!(
         name,
         "connection"

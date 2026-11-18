@@ -1684,7 +1684,7 @@ async fn dispatch_request(
 
     // Only the Anthropic passthrough speaks message threads natively; the
     // translating backends accept a new thread and reject continuing one.
-    if provider.name() != "anthropic"
+    if !matches!(provider.name(), "anthropic" | "custom-api")
         && let Some(thread) = body.extra.remove("thread")
         && thread.get("type").and_then(Value::as_str) != Some("create")
     {
