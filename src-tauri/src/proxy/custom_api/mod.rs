@@ -1,6 +1,8 @@
 //! 自定义 Claude API：用户自带 base URL / key / model，在 Claude Code `/model` 里显示为 `api-<model>`。
 //! 本模块只含数据模型、校验规则与进程内全局路由表（客户端经 `set_entries` 整体替换）。
+pub mod fingerprint;
 pub mod provider;
+pub mod verify;
 
 use serde::{Deserialize, Serialize};
 use std::sync::RwLock;
