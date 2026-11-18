@@ -62,7 +62,7 @@ const LOGO = `<svg class="logo" viewBox="0 0 100 100" aria-hidden="true"><rect x
 <path d="M48 30 L68 50 L48 70" fill="none" stroke="#D97757" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
 <rect x="72" y="62" width="10" height="8" rx="3" fill="#D97757"/></svg>`;
 
-let panel: 'none' | 'logs' | 'settings' = 'none';
+let settingsOpen = false;
 let modelsExpanded = false;
 const MODEL_PREVIEW = 8;
 
@@ -141,23 +141,19 @@ function renderMain(s: Status) {
       <div class="note"><span>${t('modelsNote')}${isDefault ? t('modelsNoteDefault', { n: DEFAULT_MODELS }) : ''}</span></div>
     </section>`;
 
-  const btns = `
-    <div class="btns">
-      <button class="btn ${panel === 'logs' ? 'on' : ''}" data-act="panel-logs">${icon.log(14)} ${t('logs')}</button>
-      <button class="btn ${panel === 'settings' ? 'on' : ''}" data-act="panel-settings">${icon.settings(14)} ${t('settings')}</button>
-    </div>`;
-
-  const logs = panel === 'logs' ? `
-    <section class="panel">
+  const logs = `
+    <section>
+      <div class="h">${t('logs')}<span class="grow"></span>
+        <button class="act" data-act="copy-logs">${icon.copy(13)} ${t('copyAll')}</button></div>
       <div class="logs" id="logs">${s.logsTail.map(logLine).join('\n') || t('noLogs')}</div>
-      <div class="row" style="margin-top:8px;justify-content:flex-end">
-        <button class="btn" data-act="copy-logs">${icon.copy(14)} ${t('copyAll')}</button></div>
-    </section>` : '';
+    </section>`;
 
-  app.innerHTML = `${topBar(`<span class="badge"><span class="dot ${overall}"></span>${overallText}</span>`, s.devMode ? 'DEV' : '')}
-    <div class="main">${alerts.join('')}${statusSec}${take}${models}${btns}${logs}<div id="settings-slot"></div></div>
-    <div class="foot">${t('foot')}</div>`;
-  if (panel === 'settings') mountSettings(s.config);
+  const right = `<span class="badge"><span class="dot ${overall}"></span>${overallText}</span>
+    <button class="btn ghost icon" data-act="open-settings" title="${t('settings')}" aria-label="${t('settings')}">${icon.settings(16)}</button>`;
+  app.innerHTML = `${topBar(right, s.devMode ? 'DEV' : '')}
+    <div class="main">${alerts.join('')}${statusSec}${take}${models}${logs}</div>
+    <div class="foot">${t('foot')}</div><div id="settings-slot"></div>`;
+  if (settingsOpen) mountSettings(s.config);
   else document.getElementById('settings-slot')?.remove();
   const box = document.getElementById('logs');
   if (box) box.scrollTop = box.scrollHeight;
@@ -179,7 +175,10 @@ function mountSettings(cfg: AppConfig) {
   const dirty = settingsDraft && JSON.stringify(settingsDraft) !== JSON.stringify(cfg);
   const langOptions = [{ value: '', label: t('langAuto') }, ...LANGS.map((l) => ({ value: l.code, label: l.name }))];
   slot.outerHTML = `
-    <section class="panel" id="settings">
+    <div class="modal-mask" id="settings-mask">
+    <section class="modal" id="settings" role="dialog" aria-modal="true" aria-label="${t('settings')}">
+      <div class="modal-h"><b>${t('settings')}</b><span class="grow"></span>
+        <button class="btn ghost icon" data-act="close-settings" title="${t('cancel')}" aria-label="${t('cancel')}">${icon.close(16)}</button></div>
       <div class="row">
         <div class="field" style="width:96px"><label for="f-port">${t('port')}</label><input id="f-port" class="input mono" inputmode="numeric" value="${d.port}"></div>
         <div class="field" style="flex:1"><label for="f-proxy">${t('outbound')}</label><input id="f-proxy" class="input mono" placeholder="${t('outboundPh')}" value="${esc(d.outbound_proxy ?? '')}"></div>
@@ -193,12 +192,12 @@ function mountSettings(cfg: AppConfig) {
           <div style="height:32px;display:flex;align-items:center"><label class="switch"><input type="checkbox" id="f-auto" ${d.autostart ? 'checked' : ''} aria-label="${t('autostart')}"><span></span></label></div></div>
       </div>
       <div class="row ver"><span>${t('version', { v: appVersion })}</span>
-        <button class="act" data-act="check-update">${icon.refresh(13)} ${t('checkUpdate')}</button></div>
+        <button class="btn ghost act" data-act="check-update">${icon.refresh(13)} ${t('checkUpdate')}</button></div>
       <div class="row" style="justify-content:flex-end;margin-top:8px;${dirty ? '' : 'display:none'}" id="settings-actions">
         <button class="btn ghost" data-act="settings-reset">${t('cancel')}</button>
         <button class="btn pri" data-act="settings-save">${t('saveApply')}</button>
       </div>
-    </section>`;
+    </section></div>`;
   const el = document.getElementById('settings')!;
   const onInput = () => {
     settingsDraft = readForm(cfg);
@@ -345,15 +344,16 @@ async function act(name: string, target: HTMLElement) {
       case 'models-none': await invoke('set_models', { models: [] }); break;
       case 'models-default': await invoke('set_models', { models: null }); break;
       case 'models-more': modelsExpanded = !modelsExpanded; render(); break;
-      case 'panel-logs': panel = panel === 'logs' ? 'none' : 'logs'; render(); break;
-      case 'panel-settings': panel = panel === 'settings' ? 'none' : 'settings'; render(); break;
+      case 'open-settings': settingsOpen = true; settingsDraft = null; render(); break;
+      case 'close-settings': closeSettings(); break;
       case 'copy-logs': { const n = await invoke<number>('copy_logs'); toast(t('toastCopiedLogs', { n })); break; }
-      case 'settings-reset': settingsDraft = null; render(); break;
+      case 'settings-reset': closeSettings(); break;
       case 'settings-save': {
         const cfg = readForm(status!.config);
         await invoke('save_config', { cfg });
         settingsDraft = null;
-        panel = 'none';
+        settingsOpen = false;
+        render();
         toast(t('toastSaved'));
         break;
       }
@@ -400,7 +400,14 @@ async function startPreview() {
   await invoke('preview_start', { cfg: wiz.cfg });
 }
 
+function closeSettings() {
+  settingsOpen = false;
+  settingsDraft = null;
+  render();
+}
+
 app.addEventListener('click', (e) => {
+  if ((e.target as HTMLElement).id === 'settings-mask') { closeSettings(); return; }
   const el = (e.target as HTMLElement).closest('[data-act]') as HTMLElement | null;
   if (!el || el.tagName === 'INPUT') return;
   e.preventDefault();
@@ -422,6 +429,9 @@ onStatus('status-changed', (s) => {
 });
 
 installSelects();
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && settingsOpen && !anySelectOpen()) closeSettings();
+});
 onEvent<UpdateInfo | null>('update-available', (u) => { update = u; if (status?.onboarded && shouldRerender()) render(); });
 onEvent<number>('update-progress', (p) => {
   updatePct = p;
@@ -436,7 +446,7 @@ onEvent<number>('update-progress', (p) => {
   setLang(status.lang);
   // 仅浏览器预览（?mock=...）用：直接展开某个面板 / 下拉，方便截图检查
   const q = new URLSearchParams(location.search);
-  if (q.has('mock') && q.get('panel')) panel = q.get('panel') as typeof panel;
+  if (q.has('mock') && q.get('panel') === 'settings') settingsOpen = true;
   if (!status.onboarded) {
     render();
     await loadEnv();
