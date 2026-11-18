@@ -50,6 +50,16 @@ Claude Code 只能吃真正的 Claude：它依赖 Anthropic Messages 协议、�
    `max_tokens: 128000`、`context_management`、effort，以及同样 8 个 `anthropic-beta` 标志、14 个工具。
    Claude Code 是在名字里识别型号的，所以**选单名必须包含真实的 `claude-…` 型号名**（`api-<model>` 满足）。
 4. **未测成**：opus-5-5 / sonnet-5-5 / fable-5-1 的签名篡改，订阅直连被限流（429）。实现阶段必须用真实 API key 验证（见第 4 节）。
+5. **实现阶段实测（2026-11-18，`scripts/custom-api-probe.py`，模型 `claude-haiku-5-5`）**：
+   - 官方（订阅 OAuth；messages 请求须带 Claude Code system 提示，否则一律 429）：count_tokens 68、usage 与 count_tokens 一致；
+     签名 1176 字符；原签名回放 200（input_tokens 333）；篡改（倒数第 8 位或中段）→ 400 `Invalid \`signature\` in \`thinking\` block`。
+     其余型号的两列基准同样经订阅实测写进对照表（各型号 usage 与 count_tokens 相等）。
+   - UCloud 中转 `api.modelverse.cn`（背后是真 Claude）：x-api-key 认证；SSE 在 `message_start` 前先发 `ping`；count_tokens 与 usage 都是 68；
+     原签名回放 200（input_tokens 273）；**篡改回放也返回 200，但 input_tokens 降到 141**——中转被 Anthropic 拒绝后剥掉 thinking 块重试，
+     400 被它吞掉了。据此在第 4 节第 4 步加了差分判据。
+   - DeepSeek `api.deepseek.com/anthropic`，模型名填 `claude-haiku-5-5` 冒充：会原样回显模型名，但 `id` 不以 `msg_` 开头（第 2 步即失败）；
+     count_tokens 67；thinking 签名只有 36 字符；篡改前后回放都返回 200，input_tokens 都是 108。
+   - 两个接口都没有返回 `redacted_thinking` 块。
 
 ## 设计
 
@@ -124,8 +134,13 @@ pub struct CustomApi {
      thinking 块）。`redacted_thinking` 块同样视为有签名可测。拿不到 thinking 时换一题重试一次再判失败。
    - **实现阶段必做**：用真实 Anthropic API key 对 opus-5-5、sonnet-5-5、fable-5-1、haiku-4-5 各跑一遍，确认篡改返回 400、
      原样回放返回 200，并把实测得到的两列分词基准写进对照表。
-   - 回放返回 400 且错误信息含 `signature` → 通过。
-   - 回放仍返回正常回答 → 「签名没有被校验，不是真正的 Claude」。
+   - 先原样回放作对照：必须 2xx，且 `usage.input_tokens` 为整数 V；缺 usage → 「签名测试异常：原签名回放缺少用量」；非 2xx → 失败。
+   - 篡改回放返回 400 且错误信息含 `signature` → 通过。
+   - 篡改回放返回 2xx 且 `usage.input_tokens` = T 满足 **T ≤ V − max(16, V/10)** → 通过（差分判据：中转被 Anthropic 拒签后，
+     剥掉无效 thinking 块重试，所以 token 数明显减少；UCloud 实测 273→141）。
+   - 篡改回放返回 2xx、T 接近 V 或没有 usage → 「签名没有被校验，不是真正的 Claude」（DeepSeek 实测 108→108）。
+   - 差分判据的前提：中转如实上报 usage。如果要伪造中转，无论用 400 判据还是差分判据，都得自己记住发出过的签名并校验，
+     两种判据的伪造难度相当。
    - 第一步就拿不到 thinking 块或签名为空 → 失败，「接口不支持 Claude 的思考签名」。
 5. **模型名核对**：响应里的 `model` 应等于或以用户填的模型名开头（如 `claude-haiku-4-5` 对应
    `claude-haiku-4-5-20251001`）。不符 → 失败，「接口返回的模型是 xxx，和填写的不一致」。

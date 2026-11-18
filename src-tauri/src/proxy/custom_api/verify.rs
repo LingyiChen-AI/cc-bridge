@@ -1,5 +1,6 @@
 //! 真 Claude 校验：认证 → 格式 → 分词指纹 → 签名篡改 → 模型名，遇到第一个 Fail 即停。
-//! 宁可错拒不可错放：最强的一步是篡改 thinking 块签名后回放，只有真 Anthropic 会校验签名并返回 400。
+//! 宁可错拒不可错放：最强的一步是篡改 thinking 块签名后回放，只有真 Anthropic 会校验签名并返回 400；
+//! 中转站吞掉 400、剥掉 thinking 重试时，靠回放前后 input_tokens 明显下降判定（见 `stripped_by_relay`）。
 //! key 只出现在出站请求头里；所有返回的文案都经 `scrub` 把 key 换成掩码。
 
 use reqwest::header::HeaderValue;
@@ -329,12 +330,16 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
         )
     };
 
-    // 对照：原签名回放必须成功，排除「任何回放都以含 signature 的 400 拒绝」的接口。
-    match up.post("/v1/messages", style, &replay(block.clone())).await {
-        Ok(r) if r.ok() => {}
+    // 对照：原签名回放必须成功，排除「任何回放都以含 signature 的 400 拒绝」的接口；
+    // 其 input_tokens 作为差分判据的基准。
+    let original_tokens = match up.post("/v1/messages", style, &replay(block.clone())).await {
+        Ok(r) if r.ok() => match r.json()["usage"]["input_tokens"].as_u64() {
+            Some(n) => n,
+            None => return fail("签名测试异常：原签名回放缺少用量"),
+        },
         Ok(r) => return fail(format!("签名测试异常：原签名回放返回 HTTP {}", r.status)),
         Err(e) => return fail(format!("签名测试异常：{e}")),
-    }
+    };
 
     let mut tampered = block;
     let sig = tamper_signature(tampered["signature"].as_str().unwrap_or_default());
@@ -347,9 +352,27 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
         {
             StepResult::Pass
         }
-        Ok(r) if r.ok() => fail("签名没有被校验，不是真正的 Claude"),
+        Ok(r) if r.ok() => {
+            let tampered_tokens = r.json()["usage"]["input_tokens"].as_u64();
+            if stripped_by_relay(original_tokens, tampered_tokens) {
+                StepResult::Pass
+            } else {
+                fail("签名没有被校验，不是真正的 Claude")
+            }
+        }
         Ok(r) => fail(format!("签名测试异常：HTTP {}", r.status)),
         Err(e) => fail(format!("签名测试异常：{e}")),
+    }
+}
+
+/// 差分判据：中转把篡改签名的请求转给 Anthropic 被拒后，常剥掉 thinking 块重试并返回 200。
+/// 此时篡改回放的 input_tokens（T）明显少于原签名回放（V）：T <= V - max(16, V/10) 视为签名被校验过。
+/// 不校验签名的接口两次计数相同（或接近）。依赖中转如实上报 usage。
+fn stripped_by_relay(original: u64, tampered: Option<u64>) -> bool {
+    let margin = (original / 10).max(16);
+    match (original.checked_sub(margin), tampered) {
+        (Some(limit), Some(t)) => t <= limit,
+        _ => false,
     }
 }
 
@@ -459,6 +482,9 @@ mod tests {
         reject_all_replays: bool,
         /// 所有 /v1/messages 都返回 400 与此 error.message。
         error_message: Option<String>,
+        /// 中转模式：(原签名回放的 input_tokens, 篡改回放的 input_tokens)，None 表示响应里不带 usage；
+        /// 篡改回放返回 200（模拟中转被拒后剥掉 thinking 重试），优先于 genuine。
+        replay_tokens: Option<(Option<u64>, Option<u64>)>,
     }
 
     impl FakeUpstream {
@@ -475,6 +501,7 @@ mod tests {
                 tampered_reply: None,
                 reject_all_replays: false,
                 error_message: None,
+                replay_tokens: None,
             }
         }
     }
@@ -545,9 +572,15 @@ mod tests {
             if let Some((status, msg)) = up.tampered_reply {
                 return api_error(status, msg);
             }
+            if let Some((_, t)) = up.replay_tokens {
+                return replay_ok(t);
+            }
             if up.genuine {
                 return api_error(400, "messages.1.content.0: Invalid `signature` in `thinking` block");
             }
+        }
+        if let (Some((orig, _)), Some(_)) = (up.replay_tokens, &replayed) {
+            return replay_ok(orig);
         }
         let mut content = Vec::new();
         if body.get("thinking").is_some() {
@@ -569,6 +602,21 @@ mod tests {
             "usage": {"input_tokens": up.usage_input, "output_tokens": 3}
         }))
         .into_response()
+    }
+
+    fn replay_ok(input_tokens: Option<u64>) -> Response {
+        let mut v = json!({
+            "id": "msg_01REPLAY",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type":"text","text":"OK"}],
+            "stop_reason": "end_turn",
+        });
+        if let Some(n) = input_tokens {
+            v["usage"] = json!({"input_tokens": n, "output_tokens": 3});
+        }
+        axum::Json(v).into_response()
     }
 
     async fn count_tokens(State(up): State<Arc<FakeUpstream>>, h: HeaderMap) -> Response {
@@ -747,6 +795,46 @@ mod tests {
         up.omit_signature = true;
         let r = run(up, "claude-opus-5-5").await;
         assert_eq!(last_fail(&r), sig_fail("接口不支持 Claude 的思考签名"));
+    }
+
+    fn relay(original: Option<u64>, tampered: Option<u64>) -> FakeUpstream {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.replay_tokens = Some((original, tampered));
+        up
+    }
+
+    #[tokio::test]
+    async fn relay_stripping_tampered_thinking_passes() {
+        // UCloud modelverse 实测：原签名回放 273，篡改回放 141（2026-11-18）。
+        for (orig, tampered) in [(273, 141), (100, 84), (300, 270)] {
+            let r = run(relay(Some(orig), Some(tampered)), "claude-opus-5-5").await;
+            assert!(r.ok, "{orig}->{tampered}: {:?}", r.steps);
+        }
+    }
+
+    #[tokio::test]
+    async fn relay_with_unchanged_tokens_fails() {
+        // DeepSeek 实测：篡改前后都是 108；差值不到 max(16, V/10) 也算没校验。
+        for (orig, tampered) in [(108, 108), (100, 85), (300, 271), (108, 120)] {
+            let r = run(relay(Some(orig), Some(tampered)), "claude-opus-5-5").await;
+            assert_eq!(
+                last_fail(&r),
+                sig_fail("签名没有被校验，不是真正的 Claude"),
+                "{orig}->{tampered}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tampered_replay_without_usage_fails() {
+        let r = run(relay(Some(273), None), "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名没有被校验，不是真正的 Claude"));
+    }
+
+    #[tokio::test]
+    async fn original_replay_without_usage_fails() {
+        let r = run(relay(None, Some(141)), "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名测试异常：原签名回放缺少用量"));
     }
 
     #[tokio::test]
