@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use std::time::Duration;
 
-use super::fingerprint::{FIXED_TEXT, baseline};
+use super::fingerprint::{Baseline, FIXED_TEXT, baseline};
 use super::{AuthStyle, mask_key};
 
 const TIMEOUT: Duration = Duration::from_secs(30);
@@ -71,7 +71,7 @@ fn describe_error(err: reqwest::Error) -> String {
     let mut out = err.to_string();
     let mut src = std::error::Error::source(&err);
     while let Some(s) = src {
-        out.push_str("：");
+        out.push('：');
         out.push_str(&s.to_string());
         src = s.source();
     }
@@ -90,14 +90,14 @@ impl Resp {
     fn json(&self) -> Value {
         serde_json::from_str(&self.text).unwrap_or(Value::Null)
     }
-    /// `error.message`，没有就用原文；取前 200 字。
-    fn error_message(&self) -> String {
+    /// `error.message`，没有就用原文；先去掉 key 再取前 200 字（否则跨截断点的 key 会漏掉）。
+    fn error_message(&self, api_key: &str) -> String {
         let v = self.json();
         let msg = v["error"]["message"]
             .as_str()
             .map(str::to_string)
             .unwrap_or_else(|| self.text.clone());
-        msg.chars().take(200).collect()
+        scrub(&msg, api_key).chars().take(200).collect()
     }
 }
 
@@ -135,8 +135,8 @@ impl Upstream<'_> {
     }
 }
 
-fn http_error(r: &Resp) -> String {
-    format!("接口返回 HTTP {}：{}", r.status, r.error_message())
+fn http_error(r: &Resp, api_key: &str) -> String {
+    format!("接口返回 HTTP {}：{}", r.status, r.error_message(api_key))
 }
 
 async fn step_auth(up: &Upstream<'_>, model: &str) -> (StepResult, Option<AuthStyle>, Value) {
@@ -156,7 +156,7 @@ async fn step_auth(up: &Upstream<'_>, model: &str) -> (StepResult, Option<AuthSt
             return (StepResult::Pass, Some(style), v);
         }
         if r.status != 401 && r.status != 403 {
-            return (fail(http_error(&r)), None, Value::Null);
+            return (fail(http_error(&r, up.key)), None, Value::Null);
         }
         last = Some(r.status);
     }
@@ -206,8 +206,13 @@ async fn step_format(up: &Upstream<'_>, style: &AuthStyle, model: &str, auth_res
     }
 }
 
-async fn step_tokenizer(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> StepResult {
-    let Some(base) = baseline(model) else {
+async fn step_tokenizer(
+    up: &Upstream<'_>,
+    style: &AuthStyle,
+    model: &str,
+    base: Option<Baseline>,
+) -> StepResult {
+    let Some(base) = base else {
         return StepResult::Skip {
             reason: "该型号没有分词基准，仅凭签名判断".into(),
         };
@@ -306,22 +311,33 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
             Err(e) => return fail(e),
         }
     }
-    let Some((question, (mut block, texts))) = found else {
+    let Some((question, (block, texts))) = found else {
         return fail("接口不支持 Claude 的思考签名");
     };
-    let tampered = tamper_signature(block["signature"].as_str().unwrap_or_default());
-    block["signature"] = Value::String(tampered);
-    let mut assistant = vec![block];
-    assistant.extend(texts);
-    let body = thinking_body(
-        model,
-        json!([
-            {"role": "user", "content": question},
-            {"role": "assistant", "content": assistant},
-            {"role": "user", "content": "Now add 1."},
-        ]),
-    );
-    match up.post("/v1/messages", style, &body).await {
+    let replay = |block: Value| {
+        let mut assistant = vec![block];
+        assistant.extend(texts.iter().cloned());
+        thinking_body(
+            model,
+            json!([
+                {"role": "user", "content": question},
+                {"role": "assistant", "content": assistant},
+                {"role": "user", "content": "Now add 1."},
+            ]),
+        )
+    };
+
+    // 对照：原签名回放必须成功，排除「任何回放都以含 signature 的 400 拒绝」的接口。
+    match up.post("/v1/messages", style, &replay(block.clone())).await {
+        Ok(r) if r.ok() => {}
+        Ok(r) => return fail(format!("签名测试异常：原签名回放返回 HTTP {}", r.status)),
+        Err(e) => return fail(format!("签名测试异常：{e}")),
+    }
+
+    let mut tampered = block;
+    let sig = tamper_signature(tampered["signature"].as_str().unwrap_or_default());
+    tampered["signature"] = Value::String(sig);
+    match up.post("/v1/messages", style, &replay(tampered)).await {
         Ok(r) if r.status == 400
             && r.json()["error"]["message"]
                 .as_str()
@@ -337,7 +353,11 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
 
 fn step_model_name(model: &str, auth_resp: &Value) -> StepResult {
     let echoed = auth_resp["model"].as_str().unwrap_or_default();
-    if echoed == model || echoed.starts_with(&format!("{model}-")) {
+    let dated = echoed
+        .strip_prefix(model)
+        .and_then(|rest| rest.strip_prefix('-'))
+        .is_some_and(|d| d.len() == 8 && d.bytes().all(|b| b.is_ascii_digit()));
+    if echoed == model || dated {
         StepResult::Pass
     } else {
         fail(format!("接口返回的模型是 {echoed}，和填写的 {model} 不一致"))
@@ -369,7 +389,8 @@ pub async fn verify(
         passed
     };
 
-    let base = match super::normalize_base_url(base_url) {
+    let checked = super::validate_model(model).and_then(|_| super::normalize_base_url(base_url));
+    let base = match checked {
         Ok(b) => b,
         Err(e) => {
             record(&mut report, StepId::Auth, fail(e));
@@ -389,7 +410,7 @@ pub async fn verify(
     if !record(&mut report, StepId::Format, result) {
         return report;
     }
-    let result = step_tokenizer(&up, &style, model).await;
+    let result = step_tokenizer(&up, &style, model, baseline(model)).await;
     if !record(&mut report, StepId::Tokenizer, result) {
         return report;
     }
@@ -422,6 +443,20 @@ mod tests {
         count_tokens: u32,
         model_echo: String,
         require_bearer: bool,
+        /// 非流式响应里的 `usage.input_tokens`。
+        usage_input: u64,
+        /// 非流式响应不是 Claude 形状（id 不以 msg_ 开头）。
+        bad_json: bool,
+        /// SSE 缺 `message_stop`。
+        bad_sse: bool,
+        /// thinking 块不带签名。
+        omit_signature: bool,
+        /// 篡改签名的回放固定返回此 (状态码, error.message)，优先于 genuine。
+        tampered_reply: Option<(u16, &'static str)>,
+        /// 任何带 thinking 历史的回放都以含 signature 的 400 拒绝（含原签名）。
+        reject_all_replays: bool,
+        /// 所有 /v1/messages 都返回 400 与此 error.message。
+        error_message: Option<String>,
     }
 
     impl FakeUpstream {
@@ -431,8 +466,23 @@ mod tests {
                 count_tokens: 68,
                 model_echo: model_echo.into(),
                 require_bearer: false,
+                usage_input: 20,
+                bad_json: false,
+                bad_sse: false,
+                omit_signature: false,
+                tampered_reply: None,
+                reject_all_replays: false,
+                error_message: None,
             }
         }
+    }
+
+    fn api_error(status: u16, message: &str) -> Response {
+        (
+            StatusCode::from_u16(status).unwrap(),
+            axum::Json(json!({"type":"error","error":{"type":"invalid_request_error","message":message}})),
+        )
+            .into_response()
     }
 
     fn authorized(up: &FakeUpstream, h: &HeaderMap) -> bool {
@@ -459,15 +509,21 @@ mod tests {
         if !authorized(&up, &h) {
             return unauthorized();
         }
+        if let Some(msg) = &up.error_message {
+            return api_error(400, msg);
+        }
         if body["stream"] == json!(true) {
-            let sse = concat!(
+            let mut sse = concat!(
                 "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
                 "event: content_block_start\ndata: {\"type\":\"content_block_start\"}\n\n",
                 "event: content_block_delta\ndata: {\"type\":\"content_block_delta\"}\n\n",
                 "event: content_block_stop\ndata: {\"type\":\"content_block_stop\"}\n\n",
                 "event: message_delta\ndata: {\"type\":\"message_delta\"}\n\n",
-                "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
-            );
+            )
+            .to_string();
+            if !up.bad_sse {
+                sse.push_str("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+            }
             return ([("content-type", "text/event-stream")], sse).into_response();
         }
         let replayed = body["messages"]
@@ -479,27 +535,36 @@ mod tests {
             .flatten()
             .find(|b| b["type"] == "thinking")
             .and_then(|b| b["signature"].as_str().map(str::to_string));
-        if up.genuine && replayed.as_deref().is_some_and(|s| s != SIG) {
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.0: Invalid `signature` in `thinking` block"}})),
-            )
-                .into_response();
+        if up.reject_all_replays && replayed.is_some() {
+            return api_error(400, "thinking signature field is not supported");
+        }
+        let tampered = replayed.as_deref().is_some_and(|s| s != SIG);
+        if tampered {
+            if let Some((status, msg)) = up.tampered_reply {
+                return api_error(status, msg);
+            }
+            if up.genuine {
+                return api_error(400, "messages.1.content.0: Invalid `signature` in `thinking` block");
+            }
         }
         let mut content = Vec::new();
         if body.get("thinking").is_some() {
-            content.push(json!({"type":"thinking","thinking":"","signature":SIG}));
+            if up.omit_signature {
+                content.push(json!({"type":"thinking","thinking":"hmm"}));
+            } else {
+                content.push(json!({"type":"thinking","thinking":"","signature":SIG}));
+            }
         }
         content.push(json!({"type":"text","text":"OK"}));
         axum::Json(json!({
-            "id": "msg_01ABC",
+            "id": if up.bad_json { "chatcmpl-1" } else { "msg_01ABC" },
             "type": "message",
             "role": "assistant",
             "model": up.model_echo,
             "content": content,
             "stop_reason": "end_turn",
             "stop_sequence": null,
-            "usage": {"input_tokens": 20, "output_tokens": 3}
+            "usage": {"input_tokens": up.usage_input, "output_tokens": 3}
         }))
         .into_response()
     }
@@ -643,6 +708,124 @@ mod tests {
             r.steps,
             [(StepId::Auth, StepResult::Fail { reason: "认证失败（HTTP 401）".into() })]
         );
+    }
+
+    fn last_fail(r: &VerifyReport) -> (StepId, String) {
+        assert!(!r.ok, "{r:?}");
+        match r.steps.last().unwrap() {
+            (id, StepResult::Fail { reason }) => (id.clone(), reason.clone()),
+            other => panic!("最后一步不是 Fail：{other:?}"),
+        }
+    }
+
+    fn sig_fail(reason: &str) -> (StepId, String) {
+        (StepId::Signature, reason.to_string())
+    }
+
+    #[tokio::test]
+    async fn tampered_replay_400_without_signature_word_fails() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.tampered_reply = Some((400, "messages: invalid request"));
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名测试异常：HTTP 400"));
+    }
+
+    #[tokio::test]
+    async fn tampered_replay_500_fails() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.tampered_reply = Some((500, "Invalid signature (internal)"));
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名测试异常：HTTP 500"));
+    }
+
+    #[tokio::test]
+    async fn missing_signature_after_retry_fails() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.omit_signature = true;
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("接口不支持 Claude 的思考签名"));
+    }
+
+    #[tokio::test]
+    async fn rejecting_every_replay_fails_on_control() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.reject_all_replays = true;
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名测试异常：原签名回放返回 HTTP 400"));
+    }
+
+    #[tokio::test]
+    async fn non_claude_json_fails_format() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.bad_json = true;
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), (StepId::Format, "不是 Claude 格式的接口".into()));
+        assert_eq!(r.steps.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn wrong_sse_sequence_fails_format() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.bad_sse = true;
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), (StepId::Format, "不是 Claude 格式的接口".into()));
+    }
+
+    #[tokio::test]
+    async fn tokenizer_falls_back_to_usage_input() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        let want = Some(Baseline { count_tokens: 68, usage_input: Some(25) });
+        for (usage, expected) in [
+            (25, StepResult::Pass),
+            (
+                30,
+                fail("分词结果和 Claude 不一致（得到 30，应为 25），可能不是 Claude 模型"),
+            ),
+        ] {
+            let mut fake = FakeUpstream::new("claude-opus-5-5");
+            fake.count_tokens = 55;
+            fake.usage_input = usage;
+            let up = Upstream { client: &client, base: serve(fake).await, key: KEY };
+            let got = step_tokenizer(&up, &AuthStyle::XApiKey, "claude-opus-5-5", want.clone()).await;
+            assert_eq!(got, expected, "usage={usage}");
+        }
+    }
+
+    #[tokio::test]
+    async fn key_echoed_across_truncation_point_is_scrubbed() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.error_message = Some(format!("{}{KEY} rest", "x".repeat(195)));
+        let r = run(up, "claude-opus-5-5").await;
+        let (id, reason) = last_fail(&r);
+        assert_eq!(id, StepId::Auth);
+        assert!(reason.starts_with("接口返回 HTTP 400："), "{reason}");
+        assert!(!reason.contains(&KEY[..10]), "{reason}");
+    }
+
+    #[tokio::test]
+    async fn model_echo_requires_exact_or_date_suffix() {
+        let mut up = FakeUpstream::new("claude-opus-5-5");
+        up.count_tokens = 66;
+        let r = run(up, "claude-opus-5").await;
+        assert_eq!(
+            last_fail(&r),
+            (
+                StepId::ModelName,
+                "接口返回的模型是 claude-opus-5-5，和填写的 claude-opus-5 不一致".into()
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_input_fails_auth_without_request() {
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        // 不起假上游：一旦发请求就会连接失败，文案会不同。
+        let r = verify(&client, "http://127.0.0.1:9", KEY, "qwen3-max", |_, _| {}).await;
+        let (id, reason) = last_fail(&r);
+        assert_eq!(id, StepId::Auth);
+        assert_eq!(reason, crate::proxy::custom_api::validate_model("qwen3-max").unwrap_err());
+        let r = verify(&client, "api.x.com", KEY, "claude-opus-5-5", |_, _| {}).await;
+        assert_eq!(last_fail(&r), (StepId::Auth, "Base URL 必须以 http:// 或 https:// 开头".into()));
     }
 
     #[test]
