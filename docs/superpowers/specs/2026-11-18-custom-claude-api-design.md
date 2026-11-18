@@ -60,6 +60,18 @@ Claude Code 只能吃真正的 Claude：它依赖 Anthropic Messages 协议、�
    - DeepSeek `api.deepseek.com/anthropic`，模型名填 `claude-haiku-5-5` 冒充：会原样回显模型名，但 `id` 不以 `msg_` 开头（第 2 步即失败）；
      count_tokens 67；thinking 签名只有 36 字符；篡改前后回放都返回 200，input_tokens 都是 108。
    - 两个接口都没有返回 `redacted_thinking` 块。
+6. **终审补测（2026-11-18，经本地 CC Bridge 订阅透传，OAuth + Claude Code system 提示，校验器同款请求形状，篡改回放先发）**：
+
+   | 型号 | thinking 形状 | 拿到签名块 | 篡改回放 | 原签名回放 |
+   |---|---|---|---|---|
+   | claude-opus-5-5 | adaptive + effort high | 是（第 1 题） | 400 `Invalid \`signature\` in \`thinking\` block` | 200，input_tokens 347 |
+   | claude-sonnet-5-5 | adaptive + effort high | 是（第 1 题无 thinking，换第 2 题拿到） | 400 同上 | 200，input_tokens 631 |
+   | claude-haiku-4-5 | enabled，budget_tokens 1024 | 是（第 1 题） | 400 同上 | 200，input_tokens 225 |
+
+   三个型号的请求形状都可用，无需修改；三次原签名回放缓存字段均为 0。sonnet-5-5 印证了「拿不到 thinking 换一题重试」是必要的。
+   固定文本不带 system 走 `/v1/messages`：haiku-4-5 得 usage.input_tokens = 60，与对照表一致；opus-5-5、sonnet-5-5 不带
+   Claude Code system 提示时订阅一律 429（重试后仍是），无法直接测，`usage_input` 维持「与 count_tokens 同值」的推断。
+   fable-5-1 本轮未测。
 
 ## 设计
 
@@ -86,6 +98,10 @@ pub struct CustomApi {
   Bedrock / Vertex 原生接口本来就不是 `/v1/messages` 协议；中转站对外基本用官方名；带 `anthropic` 的名字还会让
   `is_claude_model` 误判，导致撤销接管时不恢复 `settings.json`）。
 - 返回给前端的状态里，api_key 只给掩码（如 `sk-ant-…a1b2`）；编辑时留空表示不改 key。
+  但编辑时换了接口地址（scheme / 主机 / 端口任一变化）且 key 留空 → 拒绝「更换了接口地址，请重新填写 API Key」，
+  防止旧 key 被发往新地址。
+- Base URL 不许带 userinfo（`user:pass@host`、`user@host`）→ 拒绝「请不要在地址里带账号密码，把凭证填在 API Key 里」，
+  否则凭证会经主机名进 settings.json 的模型说明和前端列表。
 
 ### 2. 选单名称与路由
 
@@ -137,9 +153,16 @@ pub struct CustomApi {
    - V、T 均为**总输入（含缓存字段）**：`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`（缓存字段缺省为 0，
      `input_tokens` 必须存在）。Anthropic 协议的 `input_tokens` 不含缓存部分；只比它的话，带前缀缓存的非 Claude 接口在篡改回放时
      命中缓存、`input_tokens` 骤降，会被误判通过。
-   - 先原样回放作对照：必须 2xx，且总输入为整数 V；缺 `usage.input_tokens` → 「签名测试异常：原签名回放缺少用量」；非 2xx → 失败。
+   - 缓存字段存在但不是非负整数（浮点、字符串、负数）或相加溢出 → 总输入视为无法获取（不按 0 算）。
+   - **先发篡改回放，再发原签名回放作对照**：两次前缀相同，前缀缓存（哪怕用 `prompt_tokens_details` 等非标准字段上报、
+     总输入算不到）只会让后发的原签名回放 V 变小，差分判据只会偏向拒绝。
+   - 篡改回放既不是 2xx、也不是含 `signature` 的 400 → 「签名测试异常：HTTP xxx」（不再发对照）。
+   - 对照必须 2xx，且总输入为整数 V；缺 `usage.input_tokens` → 「签名测试异常：原签名回放缺少用量」；非 2xx → 失败。
+     篡改回放的 400 也要等对照成功后才算数。
    - 篡改回放返回 400 且错误信息含 `signature` → 通过。
-   - 篡改回放返回 2xx 且总输入 T 满足 **T ≤ V − max(16, V/10)** → 通过（差分判据：中转被 Anthropic 拒签后，
+   - 篡改回放返回 2xx：**只有第 3 步分词指纹是「通过」（不是「跳过」）时**才走差分判据；分词被跳过时直接失败，
+     「签名没有被校验，不是真正的 Claude（该型号无分词基准时只接受签名报错判据）」。
+   - 差分判据：总输入 T 满足 **T ≤ V − max(16, V/10)** → 通过（中转被 Anthropic 拒签后，
      剥掉无效 thinking 块重试，所以 token 数明显减少；UCloud 实测 273→141）。
    - 篡改回放返回 2xx、T 接近 V 或没有 usage → 「签名没有被校验，不是真正的 Claude」（DeepSeek 实测 108→108）。
    - 差分判据的前提：中转如实上报 usage。如果要伪造中转，无论用 400 判据还是差分判据，都得自己记住发出过的签名并校验，
@@ -149,6 +172,8 @@ pub struct CustomApi {
    `claude-haiku-4-5-20251001`）。不符 → 失败，「接口返回的模型是 xxx，和填写的不一致」。
 
 全部通过才写入 `verified_at`，并把它加进 `/model` 列表。整个过程约 4–6 个小请求，用用户自己的 key，几美分以内。
+「重新校验」失败时：判定类失败（格式、分词、签名、模型名、认证 401/403）清除 `verified_at`；网络类失败（请求失败 / 超时、
+HTTP 5xx、429，按导致失败的那次请求判断）保留已验证状态，只返回报告（`VerifyReport.transient = true`）。
 校验期间界面显示逐项进度（✓ / ✗ / 跳过），失败项显示原因。
 
 **指纹对照表**：放在代码里（如 `proxy/providers/custom_api/fingerprint.rs`），键为模型名前缀，值为固定文本的期望 token 数。
