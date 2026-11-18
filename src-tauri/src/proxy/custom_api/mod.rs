@@ -59,7 +59,7 @@ pub fn validate_model(model: &str) -> Result<(), String> {
     }
 }
 
-/// 去首尾空白、结尾 `/`、结尾 `/v1`；必须以 http:// 或 https:// 开头。
+/// 去首尾空白、结尾 `/`、结尾 `/v1`；必须以 http:// 或 https:// 开头，不许带 userinfo。
 pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     let mut url = raw.trim().trim_end_matches('/');
     if let Some(stripped) = url.strip_suffix("/v1/messages") {
@@ -67,6 +67,16 @@ pub fn normalize_base_url(raw: &str) -> Result<String, String> {
     }
     if !(url.starts_with("http://") || url.starts_with("https://")) {
         return Err("Base URL 必须以 http:// 或 https:// 开头".into());
+    }
+    // 带 userinfo 的地址会把凭证带进 settings.json 的模型说明与前端列表，一律拒绝。
+    let authority = url
+        .split_once("://")
+        .map_or(url, |(_, rest)| rest)
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or("");
+    if authority.contains('@') {
+        return Err("请不要在地址里带账号密码，把凭证填在 API Key 里".into());
     }
     if let Some(stripped) = url.strip_suffix("/v1") {
         url = stripped.trim_end_matches('/');
@@ -170,6 +180,21 @@ mod tests {
             "https://x.com/proxy/anthropic"
         );
         assert!(normalize_base_url("api.x.com").is_err());
+    }
+
+    #[test]
+    fn normalize_base_url_rejects_userinfo() {
+        const MSG: &str = "请不要在地址里带账号密码，把凭证填在 API Key 里";
+        for bad in [
+            "https://user:pass@api.x.com",
+            "https://user@api.x.com/v1",
+            "http://a:b@127.0.0.1:8080/proxy",
+            " https://sk-secret@api.x.com/ ",
+        ] {
+            assert_eq!(normalize_base_url(bad).unwrap_err(), MSG, "{bad}");
+        }
+        // 路径 / 查询里的 @ 不是 userinfo
+        assert_eq!(normalize_base_url("https://x.com/@team/anthropic").unwrap(), "https://x.com/@team/anthropic");
     }
 
     #[test]
