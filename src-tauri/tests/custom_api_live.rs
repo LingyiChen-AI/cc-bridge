@@ -18,7 +18,8 @@ use cc_bridge_lib::proxy::overrides;
 use cc_bridge_lib::proxy::server::{ServerConfig, serve_with_shutdown};
 
 const MODEL: &str = "claude-haiku-5-5";
-const CLAUDE_EXE: &str = r"C:\bench-data\bin\claude.exe";
+/// 可用环境变量 `CLAUDE_EXE` 覆盖。
+const DEFAULT_CLAUDE_EXE: &str = r"C:\bench-data\bin\claude.exe";
 
 fn env_or(name: &str, default: &str) -> String {
     std::env::var(name).ok().filter(|v| !v.is_empty()).unwrap_or_else(|| default.to_string())
@@ -138,7 +139,7 @@ async fn relay_verifies_and_serves_claude_code() {
 
     let claude_config = dir.join("claude-config");
     let picker = format!("api-{MODEL}");
-    let mut cmd = std::process::Command::new(CLAUDE_EXE);
+    let mut cmd = std::process::Command::new(env_or("CLAUDE_EXE", DEFAULT_CLAUDE_EXE));
     cmd.args(["-p", "--model", &picker, "say ok"])
         .env("ANTHROPIC_BASE_URL", format!("http://127.0.0.1:{port}"))
         .env("ANTHROPIC_API_KEY", "sk-ant-dummy-not-a-real-key")
@@ -179,6 +180,10 @@ async fn relay_verifies_and_serves_claude_code() {
         log_lines.len()
     );
 
+    // 防止空扫：沙盒里必须有文件；开了 CCP_TRAFFIC_LOG 就必须有抓包文件；日志回调必须收到行。
+    assert!(files > 0, "泄露检查没有扫到任何文件");
+    assert!(traffic > 0, "泄露检查没有扫到抓包文件");
+    assert!(!log_lines.is_empty(), "泄露检查没有收到日志");
     assert_eq!(file_hits + log_hits + out_hits, 0, "key 后 8 位出现在日志/文件/输出中");
     assert!(out.status.success(), "claude -p 失败");
     assert!(stdout.to_ascii_lowercase().contains("ok"), "回答里没有 ok：{stdout}");

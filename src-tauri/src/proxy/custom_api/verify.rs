@@ -1,6 +1,6 @@
 //! 真 Claude 校验：认证 → 格式 → 分词指纹 → 签名篡改 → 模型名，遇到第一个 Fail 即停。
 //! 宁可错拒不可错放：最强的一步是篡改 thinking 块签名后回放，只有真 Anthropic 会校验签名并返回 400；
-//! 中转站吞掉 400、剥掉 thinking 重试时，靠回放前后 input_tokens 明显下降判定（见 `stripped_by_relay`）。
+//! 中转站吞掉 400、剥掉 thinking 重试时，靠回放前后总输入（含缓存字段）明显下降判定（见 `stripped_by_relay`）。
 //! key 只出现在出站请求头里；所有返回的文案都经 `scrub` 把 key 换成掩码。
 
 use reqwest::header::HeaderValue;
@@ -333,7 +333,7 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
     // 对照：原签名回放必须成功，排除「任何回放都以含 signature 的 400 拒绝」的接口；
     // 其 input_tokens 作为差分判据的基准。
     let original_tokens = match up.post("/v1/messages", style, &replay(block.clone())).await {
-        Ok(r) if r.ok() => match r.json()["usage"]["input_tokens"].as_u64() {
+        Ok(r) if r.ok() => match total_input(&r.json()) {
             Some(n) => n,
             None => return fail("签名测试异常：原签名回放缺少用量"),
         },
@@ -353,7 +353,7 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
             StepResult::Pass
         }
         Ok(r) if r.ok() => {
-            let tampered_tokens = r.json()["usage"]["input_tokens"].as_u64();
+            let tampered_tokens = total_input(&r.json());
             if stripped_by_relay(original_tokens, tampered_tokens) {
                 StepResult::Pass
             } else {
@@ -365,8 +365,18 @@ async fn step_signature(up: &Upstream<'_>, style: &AuthStyle, model: &str) -> St
     }
 }
 
+/// 总输入 = input_tokens + cache_read_input_tokens + cache_creation_input_tokens（缓存字段缺省为 0）。
+/// Anthropic 协议里 input_tokens 不含缓存部分；只比 input_tokens 时，带前缀缓存的非 Claude 接口
+/// 会因篡改回放命中缓存而骤降，被误判为「剥掉了 thinking」。input_tokens 本身必须存在。
+fn total_input(resp: &Value) -> Option<u64> {
+    let usage = &resp["usage"];
+    let input = usage["input_tokens"].as_u64()?;
+    let cache = |k: &str| usage[k].as_u64().unwrap_or(0);
+    Some(input + cache("cache_read_input_tokens") + cache("cache_creation_input_tokens"))
+}
+
 /// 差分判据：中转把篡改签名的请求转给 Anthropic 被拒后，常剥掉 thinking 块重试并返回 200。
-/// 此时篡改回放的 input_tokens（T）明显少于原签名回放（V）：T <= V - max(16, V/10) 视为签名被校验过。
+/// 此时篡改回放的总输入（T，含缓存字段）明显少于原签名回放（V）：T <= V - max(16, V/10) 视为签名被校验过。
 /// 不校验签名的接口两次计数相同（或接近）。依赖中转如实上报 usage。
 fn stripped_by_relay(original: u64, tampered: Option<u64>) -> bool {
     let margin = (original / 10).max(16);
@@ -485,6 +495,8 @@ mod tests {
         /// 中转模式：(原签名回放的 input_tokens, 篡改回放的 input_tokens)，None 表示响应里不带 usage；
         /// 篡改回放返回 200（模拟中转被拒后剥掉 thinking 重试），优先于 genuine。
         replay_tokens: Option<(Option<u64>, Option<u64>)>,
+        /// 篡改回放额外报的 `cache_read_input_tokens`（模拟有前缀缓存的非 Claude 接口）。
+        tampered_cache_read: Option<u64>,
     }
 
     impl FakeUpstream {
@@ -502,6 +514,7 @@ mod tests {
                 reject_all_replays: false,
                 error_message: None,
                 replay_tokens: None,
+                tampered_cache_read: None,
             }
         }
     }
@@ -573,14 +586,14 @@ mod tests {
                 return api_error(status, msg);
             }
             if let Some((_, t)) = up.replay_tokens {
-                return replay_ok(t);
+                return replay_ok(t, up.tampered_cache_read);
             }
             if up.genuine {
                 return api_error(400, "messages.1.content.0: Invalid `signature` in `thinking` block");
             }
         }
         if let (Some((orig, _)), Some(_)) = (up.replay_tokens, &replayed) {
-            return replay_ok(orig);
+            return replay_ok(orig, None);
         }
         let mut content = Vec::new();
         if body.get("thinking").is_some() {
@@ -604,7 +617,7 @@ mod tests {
         .into_response()
     }
 
-    fn replay_ok(input_tokens: Option<u64>) -> Response {
+    fn replay_ok(input_tokens: Option<u64>, cache_read: Option<u64>) -> Response {
         let mut v = json!({
             "id": "msg_01REPLAY",
             "type": "message",
@@ -615,6 +628,10 @@ mod tests {
         });
         if let Some(n) = input_tokens {
             v["usage"] = json!({"input_tokens": n, "output_tokens": 3});
+            if let Some(c) = cache_read {
+                v["usage"]["cache_read_input_tokens"] = json!(c);
+                v["usage"]["cache_creation_input_tokens"] = json!(0);
+            }
         }
         axum::Json(v).into_response()
     }
@@ -823,6 +840,34 @@ mod tests {
                 "{orig}->{tampered}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn prefix_cache_hit_is_not_a_stripped_block() {
+        // 非 Claude 接口有前缀缓存时，篡改回放的 input_tokens 会因缓存命中骤降，总输入不变 → 不能放过。
+        let mut up = relay(Some(273), Some(20));
+        up.tampered_cache_read = Some(253);
+        let r = run(up, "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名没有被校验，不是真正的 Claude"));
+        // 总输入确实下降（剥掉 thinking）时仍通过，即便部分来自缓存。
+        let mut up = relay(Some(273), Some(41));
+        up.tampered_cache_read = Some(100);
+        assert!(run(up, "claude-opus-5-5").await.ok);
+    }
+
+    #[tokio::test]
+    async fn tiny_original_replay_cannot_pass_by_difference() {
+        let r = run(relay(Some(10), Some(0)), "claude-opus-5-5").await;
+        assert_eq!(last_fail(&r), sig_fail("签名没有被校验，不是真正的 Claude"));
+    }
+
+    #[test]
+    fn total_input_includes_cache_fields() {
+        let v = json!({"usage": {"input_tokens": 20, "cache_read_input_tokens": 253}});
+        assert_eq!(total_input(&v), Some(273));
+        let v = json!({"usage": {"input_tokens": 5, "cache_read_input_tokens": 7, "cache_creation_input_tokens": 9}});
+        assert_eq!(total_input(&v), Some(21));
+        assert_eq!(total_input(&json!({"usage": {"cache_read_input_tokens": 253}})), None);
     }
 
     #[tokio::test]

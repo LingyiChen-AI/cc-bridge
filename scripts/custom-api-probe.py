@@ -149,7 +149,9 @@ def main():
     def show(label, b):
         st, text = post("/v1/messages", replay(b), auth)
         ok = 200 <= st < 300
-        detail = f"input_tokens={(js(text).get('usage') or {}).get('input_tokens')}" if ok else err_msg(text)
+        u = js(text).get("usage") or {}
+        detail = (f"input_tokens={u.get('input_tokens')} cache_read={u.get('cache_read_input_tokens')} "
+                  f"cache_creation={u.get('cache_creation_input_tokens')}") if ok else err_msg(text)
         out(label, f"HTTP {st} {detail}")
 
     show("replay_original", blk)

@@ -134,9 +134,12 @@ pub struct CustomApi {
      thinking 块）。`redacted_thinking` 块同样视为有签名可测。拿不到 thinking 时换一题重试一次再判失败。
    - **实现阶段必做**：用真实 Anthropic API key 对 opus-5-5、sonnet-5-5、fable-5-1、haiku-4-5 各跑一遍，确认篡改返回 400、
      原样回放返回 200，并把实测得到的两列分词基准写进对照表。
-   - 先原样回放作对照：必须 2xx，且 `usage.input_tokens` 为整数 V；缺 usage → 「签名测试异常：原签名回放缺少用量」；非 2xx → 失败。
+   - V、T 均为**总输入（含缓存字段）**：`input_tokens + cache_read_input_tokens + cache_creation_input_tokens`（缓存字段缺省为 0，
+     `input_tokens` 必须存在）。Anthropic 协议的 `input_tokens` 不含缓存部分；只比它的话，带前缀缓存的非 Claude 接口在篡改回放时
+     命中缓存、`input_tokens` 骤降，会被误判通过。
+   - 先原样回放作对照：必须 2xx，且总输入为整数 V；缺 `usage.input_tokens` → 「签名测试异常：原签名回放缺少用量」；非 2xx → 失败。
    - 篡改回放返回 400 且错误信息含 `signature` → 通过。
-   - 篡改回放返回 2xx 且 `usage.input_tokens` = T 满足 **T ≤ V − max(16, V/10)** → 通过（差分判据：中转被 Anthropic 拒签后，
+   - 篡改回放返回 2xx 且总输入 T 满足 **T ≤ V − max(16, V/10)** → 通过（差分判据：中转被 Anthropic 拒签后，
      剥掉无效 thinking 块重试，所以 token 数明显减少；UCloud 实测 273→141）。
    - 篡改回放返回 2xx、T 接近 V 或没有 usage → 「签名没有被校验，不是真正的 Claude」（DeepSeek 实测 108→108）。
    - 差分判据的前提：中转如实上报 usage。如果要伪造中转，无论用 400 判据还是差分判据，都得自己记住发出过的签名并校验，
