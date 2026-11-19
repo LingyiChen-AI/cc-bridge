@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
+use crate::proxy::usage_tap::TokenUsage;
+
 mod mock;
 pub mod remote;
 pub mod snapshot;
@@ -133,6 +135,11 @@ pub enum MonitorEvent {
         request_id: String,
         error: String,
     },
+    /// 响应结束时由 usage 解析器给出的四项 token（后到覆盖先到）。
+    UsageFinal {
+        request_id: String,
+        usage: TokenUsage,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -159,6 +166,8 @@ pub struct ActiveRequest {
     pub output_tokens: Option<u64>,
     pub error: Option<String>,
     pub traffic_capture_path: Option<PathBuf>,
+    /// 精确的四项 token（缓存读写分开），供用量统计使用。
+    pub usage: Option<TokenUsage>,
 }
 
 impl ActiveRequest {
@@ -203,6 +212,8 @@ pub struct CompletedRequest {
     pub output_tokens: Option<u64>,
     pub error: Option<String>,
     pub traffic_capture_path: Option<PathBuf>,
+    /// 精确的四项 token（缓存读写分开），供用量统计使用。
+    pub usage: Option<TokenUsage>,
 }
 
 impl CompletedRequest {
@@ -481,6 +492,13 @@ impl MonitorHandle {
         });
     }
 
+    pub fn usage_final(&self, request_id: impl Into<String>, usage: TokenUsage) {
+        self.publish(MonitorEvent::UsageFinal {
+            request_id: request_id.into(),
+            usage,
+        });
+    }
+
     pub fn request_failed(
         &self,
         request_id: impl Into<String>,
@@ -536,6 +554,7 @@ impl MonitorStore {
                         output_tokens: None,
                         error: None,
                         traffic_capture_path: None,
+                        usage: None,
                     },
                 );
             }
@@ -594,6 +613,17 @@ impl MonitorStore {
                     active.generation_initial_output_tokens = active.output_tokens.unwrap_or(0);
                     active.generation_finished_at = None;
                     active.generation_duration = None;
+                }
+            }
+            MonitorEvent::UsageFinal { request_id, usage } => {
+                if let Some(active) = self.active.get_mut(&request_id) {
+                    active.usage = Some(usage);
+                } else if let Some(completed) = self
+                    .recent
+                    .iter_mut()
+                    .find(|request| request.request_id == request_id)
+                {
+                    completed.usage = Some(usage);
                 }
             }
             MonitorEvent::TrafficCapturePath { request_id, path } => {
@@ -808,6 +838,7 @@ impl MonitorStore {
                 output_tokens: None,
                 error: None,
                 traffic_capture_path: None,
+                usage: None,
             });
         if output_tokens.is_some()
             && let Some(started) = active.generation_started_instant
@@ -843,6 +874,7 @@ impl MonitorStore {
             output_tokens: active.output_tokens,
             error: error.or(active.error),
             traffic_capture_path: active.traffic_capture_path,
+            usage: active.usage,
         };
         if let Some(tokens) = completed.output_tokens.filter(|tokens| *tokens > 0) {
             self.record_session_output(
@@ -1158,6 +1190,27 @@ mod tests {
     }
 
     #[test]
+    fn usage_final_reaches_completed_request() {
+        use crate::proxy::usage_tap::TokenUsage;
+        let monitor = MonitorHandle::new(10);
+        monitor.request_started("r1", None, None, EndpointKind::Messages);
+        monitor.stream_progress("r1", 10, 1, Some(9000), Some(0));
+        let usage = TokenUsage {
+            input: 120,
+            cache_read: 8800,
+            cache_write_5m: 0,
+            cache_write_1h: 0,
+            output: 30,
+        };
+        monitor.usage_final("r1", usage);
+        monitor.request_completed("r1", 200, None, None);
+        let state = monitor.snapshot();
+        assert_eq!(state.recent[0].usage, Some(usage));
+        // 旧字段行为不变
+        assert_eq!(state.recent[0].input_tokens, Some(9000));
+    }
+
+    #[test]
     fn uptime_uses_the_service_monotonic_clock() {
         let monitor = MonitorHandle::new(10);
         {
@@ -1400,6 +1453,7 @@ data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input
             output_tokens: Some(output_tokens),
             error: None,
             traffic_capture_path: None,
+            usage: None,
         }
     }
 

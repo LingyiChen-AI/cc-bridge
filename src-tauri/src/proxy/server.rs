@@ -37,6 +37,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use crate::proxy::usage_tap::{TokenUsage, UsageTap};
 use http_body_util::{BodyExt, StreamBody};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -1913,16 +1914,34 @@ fn monitor_response_body(response: Response, guard: RequestMonitorGuard) -> Resp
     // Stamped on the parts before the body is streamed, so a streaming SSE
     // response carries the header too.
     stamp_request_id(&mut parts.headers, &guard.req_id);
+    // 按响应 content-type 增量解析 usage（SSE / JSON），结束时上报给监控。
+    let tap = UsageTap::new(
+        parts
+            .headers
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
     let stream = futures_util::stream::unfold(
-        (body, guard, outcome),
-        move |(mut body, mut guard, outcome)| async move {
+        (body, guard, outcome, tap),
+        move |(mut body, mut guard, outcome, mut tap)| async move {
             match body.frame().await {
-                Some(Ok(frame)) => Some((Ok(frame), (body, guard, outcome))),
+                Some(Ok(frame)) => {
+                    if let Some(data) = frame.data_ref() {
+                        tap.feed(data);
+                    }
+                    Some((Ok(frame), (body, guard, outcome, tap)))
+                }
                 Some(Err(err)) => {
+                    if let Some(usage) = tap.finish() {
+                        guard.usage(usage);
+                    }
                     guard.failed(status, err.to_string());
-                    Some((Err(err), (body, guard, outcome)))
+                    Some((Err(err), (body, guard, outcome, UsageTap::new(None))))
                 }
                 None => {
+                    if let Some(usage) = tap.finish() {
+                        guard.usage(usage);
+                    }
                     if let Some(message) = outcome.as_ref().and_then(NativeResponseOutcome::failure)
                     {
                         guard.failed(status, message);
@@ -2139,6 +2158,12 @@ struct RequestMonitorGuard {
 impl RequestMonitorGuard {
     fn new(monitor: Option<MonitorHandle>, req_id: String) -> Self {
         Self { monitor, req_id }
+    }
+
+    fn usage(&mut self, usage: TokenUsage) {
+        if let Some(monitor) = self.monitor.as_ref() {
+            monitor.usage_final(&self.req_id, usage);
+        }
     }
 
     fn completed(&mut self, status: StatusCode) {
@@ -2463,5 +2488,62 @@ mod auto_review_tests {
             apply_auto_review_model(&mut classifier, true, Some("gpt-5.4"), "codex").is_none()
         );
         assert_eq!(classifier.model.as_deref(), Some("gpt-5.6-sol"));
+    }
+}
+
+#[cfg(test)]
+mod usage_tap_tests {
+    use super::{RequestMonitorGuard, monitor_response_body};
+    use crate::proxy::monitor::{MonitorHandle, RequestStatus};
+    use axum::body::{Body, Bytes};
+    use axum::response::Response;
+    use http::StatusCode;
+    use http_body_util::BodyExt;
+
+    async fn drain(response: Response) {
+        let _ = response.into_body().collect().await;
+    }
+
+    #[tokio::test]
+    async fn reports_usage_before_completion() {
+        let m = MonitorHandle::new(10);
+        m.request_started("u1", None, None, crate::proxy::monitor::EndpointKind::Messages);
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u1".to_string());
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(
+                b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":120,\"cache_read_input_t",
+            )),
+            Ok(Bytes::from_static(
+                b"okens\":8800,\"output_tokens\":1}}}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_to",
+            )),
+            Ok(Bytes::from_static(b"kens\":30}}\n\n")),
+        ];
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(futures_util::stream::iter(chunks)))
+            .unwrap();
+        drain(monitor_response_body(response, guard)).await;
+        let state = m.snapshot();
+        assert_eq!(state.recent[0].status, RequestStatus::Completed);
+        let usage = state.recent[0].usage.unwrap();
+        assert_eq!(usage.cache_read, 8800);
+        assert_eq!(usage.output, 30);
+    }
+
+    #[tokio::test]
+    async fn error_response_has_no_usage() {
+        let m = MonitorHandle::new(10);
+        m.request_started("u2", None, None, crate::proxy::monitor::EndpointKind::Messages);
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u2".to_string());
+        let response = Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"type":"error","error":{"message":"boom"}}"#))
+            .unwrap();
+        drain(monitor_response_body(response, guard)).await;
+        let state = m.snapshot();
+        assert_eq!(state.recent[0].status, RequestStatus::Failed);
+        assert!(state.recent[0].usage.is_none());
     }
 }

@@ -680,6 +680,7 @@ fn active_request(
         output_tokens: None,
         error: None,
         traffic_capture_path: None,
+        usage: None,
     }
 }
 
@@ -721,6 +722,7 @@ fn completed_request(
         output_tokens: None,
         error: None,
         traffic_capture_path: None,
+        usage: None,
     }
 }
 
