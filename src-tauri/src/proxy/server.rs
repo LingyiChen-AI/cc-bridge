@@ -28,6 +28,7 @@ use crate::proxy::{
     request_identity::{CLAUDE_AGENT_HEADER, CLAUDE_PARENT_AGENT_HEADER, ConversationIdentity},
     session::{self, SessionState},
     traffic::{TrafficCaptureOptions, create_traffic_capture},
+    usage_tap::{TokenUsage, UsageTap},
 };
 use axum::{
     Json, Router,
@@ -37,7 +38,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use crate::proxy::usage_tap::{TokenUsage, UsageTap};
 use http_body_util::{BodyExt, StreamBody};
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
@@ -1454,7 +1454,8 @@ async fn dispatch_request(
     if let Some(monitor) = state.monitor.as_ref() {
         monitor.request_started(&req_id, session_id.clone(), None, endpoint);
     }
-    let request_guard = RequestMonitorGuard::new(state.monitor.clone(), req_id.clone());
+    let request_guard = RequestMonitorGuard::new(state.monitor.clone(), req_id.clone())
+        .with_usage_tracking(endpoint == EndpointKind::Messages);
     let now = current_millis();
     let body_bytes = match axum::body::to_bytes(req.into_body(), MAX_ANTHROPIC_REQUEST_BYTES).await
     {
@@ -1915,31 +1916,34 @@ fn monitor_response_body(response: Response, guard: RequestMonitorGuard) -> Resp
     // response carries the header too.
     stamp_request_id(&mut parts.headers, &guard.req_id);
     // 按响应 content-type 增量解析 usage（SSE / JSON），结束时上报给监控。
-    let tap = UsageTap::new(
-        parts
-            .headers
-            .get(http::header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok()),
-    );
+    // 只对 Messages 端点启用；其它端点（Responses/Images 等）不解析，也不缓冲。
+    let tap = guard.track_usage.then(|| {
+        UsageTap::new(
+            parts
+                .headers
+                .get(http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+        )
+    });
     let stream = futures_util::stream::unfold(
         (body, guard, outcome, tap),
         move |(mut body, mut guard, outcome, mut tap)| async move {
             match body.frame().await {
                 Some(Ok(frame)) => {
-                    if let Some(data) = frame.data_ref() {
+                    if let (Some(tap), Some(data)) = (tap.as_mut(), frame.data_ref()) {
                         tap.feed(data);
                     }
                     Some((Ok(frame), (body, guard, outcome, tap)))
                 }
                 Some(Err(err)) => {
-                    if let Some(usage) = tap.finish() {
+                    if let Some(usage) = tap.take().and_then(UsageTap::finish) {
                         guard.usage(usage);
                     }
                     guard.failed(status, err.to_string());
-                    Some((Err(err), (body, guard, outcome, UsageTap::new(None))))
+                    Some((Err(err), (body, guard, outcome, tap)))
                 }
                 None => {
-                    if let Some(usage) = tap.finish() {
+                    if let Some(usage) = tap.take().and_then(UsageTap::finish) {
                         guard.usage(usage);
                     }
                     if let Some(message) = outcome.as_ref().and_then(NativeResponseOutcome::failure)
@@ -2153,11 +2157,22 @@ fn redact_error_key(value: Value) -> Value {
 struct RequestMonitorGuard {
     monitor: Option<MonitorHandle>,
     req_id: String,
+    /// 是否解析响应 usage；仅 Messages 端点开启，默认关闭以免漏改时误统计。
+    track_usage: bool,
 }
 
 impl RequestMonitorGuard {
     fn new(monitor: Option<MonitorHandle>, req_id: String) -> Self {
-        Self { monitor, req_id }
+        Self {
+            monitor,
+            req_id,
+            track_usage: false,
+        }
+    }
+
+    fn with_usage_tracking(mut self, enabled: bool) -> Self {
+        self.track_usage = enabled;
+        self
     }
 
     fn usage(&mut self, usage: TokenUsage) {
@@ -2494,7 +2509,7 @@ mod auto_review_tests {
 #[cfg(test)]
 mod usage_tap_tests {
     use super::{RequestMonitorGuard, monitor_response_body};
-    use crate::proxy::monitor::{MonitorHandle, RequestStatus};
+    use crate::proxy::monitor::{EndpointKind, MonitorHandle, RequestStatus};
     use axum::body::{Body, Bytes};
     use axum::response::Response;
     use http::StatusCode;
@@ -2507,8 +2522,9 @@ mod usage_tap_tests {
     #[tokio::test]
     async fn reports_usage_before_completion() {
         let m = MonitorHandle::new(10);
-        m.request_started("u1", None, None, crate::proxy::monitor::EndpointKind::Messages);
-        let guard = RequestMonitorGuard::new(Some(m.clone()), "u1".to_string());
+        m.request_started("u1", None, None, EndpointKind::Messages);
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u1".to_string())
+            .with_usage_tracking(true);
         let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
             Ok(Bytes::from_static(
                 b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":120,\"cache_read_input_t",
@@ -2534,8 +2550,9 @@ mod usage_tap_tests {
     #[tokio::test]
     async fn error_response_has_no_usage() {
         let m = MonitorHandle::new(10);
-        m.request_started("u2", None, None, crate::proxy::monitor::EndpointKind::Messages);
-        let guard = RequestMonitorGuard::new(Some(m.clone()), "u2".to_string());
+        m.request_started("u2", None, None, EndpointKind::Messages);
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u2".to_string())
+            .with_usage_tracking(true);
         let response = Response::builder()
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header("content-type", "application/json")
@@ -2544,6 +2561,56 @@ mod usage_tap_tests {
         drain(monitor_response_body(response, guard)).await;
         let state = m.snapshot();
         assert_eq!(state.recent[0].status, RequestStatus::Failed);
+        assert!(state.recent[0].usage.is_none());
+    }
+
+    #[tokio::test]
+    async fn non_messages_endpoint_has_no_usage() {
+        let m = MonitorHandle::new(10);
+        m.request_started("u3", None, None, EndpointKind::Responses);
+        // 非 Messages 端点：guard 默认不开启 usage 解析
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u3".to_string());
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"usage":{"input_tokens":5,"output_tokens":7}}"#))
+            .unwrap();
+        drain(monitor_response_body(response, guard)).await;
+        let state = m.snapshot();
+        assert_eq!(state.recent[0].status, RequestStatus::Completed);
+        assert!(state.recent[0].usage.is_none());
+    }
+
+    #[tokio::test]
+    async fn dropped_body_is_abandoned_without_usage() {
+        let m = MonitorHandle::new(10);
+        m.request_started("u4", None, None, EndpointKind::Messages);
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u4".to_string())
+            .with_usage_tracking(true);
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(
+                b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1}}}\n\n",
+            )),
+            Ok(Bytes::from_static(b"event: ping\ndata: {}\n\n")),
+        ];
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(futures_util::stream::iter(chunks)))
+            .unwrap();
+        let mut body = monitor_response_body(response, guard).into_body();
+        // 只读一帧就丢弃
+        let _ = body.frame().await;
+        drop(body);
+        let state = m.snapshot();
+        assert_eq!(state.recent[0].status, RequestStatus::Failed);
+        assert!(
+            state.recent[0]
+                .error
+                .as_deref()
+                .unwrap_or_default()
+                .contains("ended before completion")
+        );
         assert!(state.recent[0].usage.is_none());
     }
 }
