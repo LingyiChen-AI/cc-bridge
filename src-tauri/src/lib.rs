@@ -245,9 +245,11 @@ pub fn run() {
             let home = dirs::home_dir().expect("home dir");
             let data_dir = app.path().app_data_dir()?.join(if config::DEV_MODE { "dev" } else { "" });
             let ctl = Controller::new(handle.clone(), home, data_dir.clone());
-            // 请求统计：每 2 秒从代理的请求监控收一次，有新请求就推给界面并写盘
+            // 请求统计：每 2 秒从代理的请求监控收一次，有新请求就推给界面；
+            // 写盘节流到最多 30 秒一次，退出（RunEvent::Exit / 关机注销）时补写
             let stats = Arc::new(stats::Stats::load(data_dir.join("usage.json"), data_dir.join("stats.json")));
             app.manage(stats.clone());
+            shutdown::set_stats(stats.clone());
             {
                 let monitor = ctl.sup.monitor();
                 let h = handle.clone();
@@ -255,8 +257,8 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     if stats.ingest(&monitor) {
                         let _ = h.emit("activity", stats.overview());
-                        stats.save();
                     }
+                    stats.save_throttled();
                 });
             }
             let tray = tray::build(&handle, ctl.clone())?;
@@ -321,6 +323,10 @@ pub fn run() {
             if let tauri::RunEvent::Exit = event {
                 if let Some(c) = app.try_state::<Arc<Controller>>() {
                     c.shutdown();
+                }
+                // 节流期间攒下的统计补写一次
+                if let Some(s) = app.try_state::<Arc<stats::Stats>>() {
+                    s.save();
                 }
             }
         });

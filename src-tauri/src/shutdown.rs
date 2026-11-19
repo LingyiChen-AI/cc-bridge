@@ -1,8 +1,15 @@
 //! 系统关机 / 注销 / 终止信号时撤销接管并结束代理。
 use crate::controller::Controller;
+use crate::stats::Stats;
 use std::sync::{Arc, OnceLock};
 
 static CTL: OnceLock<Arc<Controller>> = OnceLock::new();
+/// 关机 / 注销 / 信号退出不走 RunEvent::Exit，在这里补写节流期间攒下的统计
+static STATS: OnceLock<Arc<Stats>> = OnceLock::new();
+
+pub fn set_stats(stats: Arc<Stats>) {
+    let _ = STATS.set(stats);
+}
 
 pub fn install(ctl: Arc<Controller>, window: &tauri::WebviewWindow) {
     let _ = CTL.set(ctl);
@@ -18,6 +25,9 @@ pub fn install(ctl: Arc<Controller>, window: &tauri::WebviewWindow) {
 fn on_session_end() {
     if let Some(c) = CTL.get() {
         c.shutdown();
+    }
+    if let Some(s) = STATS.get() {
+        s.save();
     }
 }
 

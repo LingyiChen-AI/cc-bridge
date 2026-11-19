@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
 use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use serde::{Deserialize, Serialize};
 
@@ -369,7 +369,12 @@ struct Inner {
     dirty: bool,
     /// 磁盘上的 usage.json 状态不明（读不了 / 坏文件没能备份）时置位，本次运行不写盘，避免覆盖原文件
     persist_disabled: bool,
+    /// 上次尝试写盘的时间；节流写盘按它算间隔
+    last_save: Option<Instant>,
 }
+
+/// 脏数据最多每隔这么久写一次盘；退出时另外补写一次
+const SAVE_INTERVAL: Duration = Duration::from_secs(30);
 
 pub struct Stats {
     path: PathBuf,
@@ -464,6 +469,7 @@ impl Stats {
                 persist,
                 dirty,
                 persist_disabled,
+                last_save: None,
             }),
         }
     }
@@ -521,17 +527,48 @@ impl Stats {
         changed
     }
 
-    /// 有改动时写盘（先写临时文件再改名，避免写一半）
+    /// 有改动时立即写盘（退出时补写用）
     pub fn save(&self) {
         let mut g = self.inner.lock().unwrap();
+        self.write_locked(&mut g, Instant::now());
+    }
+
+    /// 节流写盘：有改动且距上次写盘满 SAVE_INTERVAL（或从没写过）才写；返回本次是否尝试了写盘
+    pub fn save_throttled(&self) -> bool {
+        self.save_throttled_at(Instant::now())
+    }
+
+    fn save_throttled_at(&self, now: Instant) -> bool {
+        let mut g = self.inner.lock().unwrap();
+        if !g.dirty || g.persist_disabled {
+            return false;
+        }
+        if g.last_save.is_some_and(|t| now.saturating_duration_since(t) < SAVE_INTERVAL) {
+            return false;
+        }
+        self.write_locked(&mut g, now);
+        true
+    }
+
+    /// 先写临时文件再改名，避免写一半；失败打 warn，保留 dirty 等下次重试
+    fn write_locked(&self, g: &mut Inner, now: Instant) {
         if !g.dirty || g.persist_disabled {
             return;
         }
-        if let Ok(json) = serde_json::to_vec(&g.persist) {
-            let tmp = self.path.with_extension("json.tmp");
-            if std::fs::write(&tmp, json).is_ok() && std::fs::rename(&tmp, &self.path).is_ok() {
-                g.dirty = false;
+        // 成败都记时间：写失败时也按间隔重试，不会每 2 秒刷一次 warn
+        g.last_save = Some(now);
+        let json = match serde_json::to_vec(&g.persist) {
+            Ok(json) => json,
+            Err(e) => {
+                tracing::warn!("序列化 usage.json 失败：{e}");
+                return;
             }
+        };
+        let tmp = self.path.with_extension("json.tmp");
+        let res = std::fs::write(&tmp, json).and_then(|()| std::fs::rename(&tmp, &self.path));
+        match res {
+            Ok(()) => g.dirty = false,
+            Err(e) => tracing::warn!("写入 {} 失败：{e}", self.path.display()),
         }
     }
 
@@ -699,6 +736,37 @@ mod tests {
             }
         }
         m
+    }
+
+    #[test]
+    fn save_throttled_writes_at_most_every_interval() {
+        let dir = std::env::temp_dir().join(format!("ccb-stats-throttle-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("usage.json");
+        let s = Stats::load(path.clone(), dir.join("stats.json"));
+        let t0 = Instant::now();
+        // 磁盘上 usage.json 记的今日请求数
+        let on_disk = || Stats::load(path.clone(), dir.join("stats.json")).overview().today.count;
+        assert!(!s.save_throttled_at(t0), "没有改动不写");
+
+        s.ingest(&monitor_with(&[("a", "anthropic", "claude-opus-5-5", Ok(200))]));
+        assert!(s.save_throttled_at(t0), "从没写过：有改动立即写");
+        assert_eq!(on_disk(), 1);
+
+        s.ingest(&monitor_with(&[("b", "anthropic", "claude-opus-5-5", Ok(200))]));
+        assert!(!s.save_throttled_at(t0 + Duration::from_secs(29)), "30 秒内不再写");
+        assert_eq!(on_disk(), 1);
+        assert!(s.save_throttled_at(t0 + Duration::from_secs(30)), "满 30 秒写入");
+        assert_eq!(on_disk(), 2);
+        assert!(!s.save_throttled_at(t0 + Duration::from_secs(90)), "写完不脏就不写");
+
+        // 退出补写：节流窗口内也立即写
+        s.ingest(&monitor_with(&[("c", "anthropic", "claude-opus-5-5", Ok(200))]));
+        assert!(!s.save_throttled_at(t0 + Duration::from_secs(31)));
+        s.save();
+        assert_eq!(on_disk(), 3);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Windows 没有 /usr/share/zoneinfo，必须靠 tzdb-bundle-platform 打包的时区库；
