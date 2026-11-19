@@ -18,6 +18,7 @@ pub mod server;
 pub mod session;
 pub mod traffic;
 pub mod tui;
+pub mod usage_tap;
 
 pub use crate::proxy::anthropic::error::{ErrorDetail, ErrorEnvelope, json_error};
 pub use crate::proxy::anthropic::schema::MessagesRequest;

@@ -6,6 +6,7 @@ pub mod custom_apis;
 pub mod i18n;
 pub mod log_buffer;
 pub mod platform;
+pub mod pricing;
 pub mod proxy;
 pub mod shutdown;
 pub mod supervisor;
