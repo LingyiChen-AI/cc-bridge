@@ -141,9 +141,26 @@ fn legacy_route(model: &str) -> &'static str {
     }
 }
 
+/// 坏文件的备份名：usage.json.bad，已存在就依次用 .bad.1、.bad.2……，不覆盖旧备份
+fn unique_bad_path(path: &std::path::Path) -> PathBuf {
+    let first = path.with_extension("json.bad");
+    if !first.exists() {
+        return first;
+    }
+    (1u32..)
+        .map(|n| path.with_extension(format!("json.bad.{n}")))
+        .find(|p| !p.exists())
+        .unwrap_or(first)
+}
+
 fn import_legacy(legacy: &std::path::Path) -> Persist {
     let mut p = Persist::default();
-    let Some(old) = std::fs::read(legacy).ok().and_then(|b| serde_json::from_slice::<LegacyPersist>(&b).ok()) else {
+    let bytes = match std::fs::read(legacy) {
+        Ok(b) => b,
+        Err(_) => return p,
+    };
+    let Ok(old) = serde_json::from_slice::<LegacyPersist>(&bytes) else {
+        tracing::warn!("旧 stats.json 解析失败，跳过导入");
         return p;
     };
     for (day, models) in old.days {
@@ -187,6 +204,8 @@ struct Inner {
     recent: VecDeque<Activity>,
     persist: Persist,
     dirty: bool,
+    /// 磁盘上的 usage.json 状态不明（读不了 / 坏文件没能备份）时置位，本次运行不写盘，避免覆盖原文件
+    persist_disabled: bool,
 }
 
 pub struct Stats {
@@ -241,19 +260,36 @@ impl Stats {
     /// 读 usage.json；它不存在时一次性导入旧 stats.json；损坏时改名 .bad 后从空开始（不导入旧文件）。
     pub fn load(path: PathBuf, legacy: PathBuf) -> Self {
         let mut dirty = false;
+        let mut persist_disabled = false;
         let persist = match std::fs::read(&path) {
             Ok(b) => match serde_json::from_slice::<Persist>(&b) {
                 Ok(p) => p,
-                Err(_) => {
-                    let _ = std::fs::rename(&path, path.with_extension("json.bad"));
-                    dirty = true;
+                Err(e) => {
+                    // 坏文件先备份（不覆盖已有备份）再从空开始；备份失败就不落盘，免得空数据把它盖掉
+                    let bad = unique_bad_path(&path);
+                    match std::fs::rename(&path, &bad) {
+                        Ok(()) => {
+                            tracing::warn!("usage.json 损坏（{e}），已备份为 {}，从空开始", bad.display());
+                            dirty = true;
+                        }
+                        Err(re) => {
+                            tracing::warn!("usage.json 损坏（{e}）且备份失败（{re}），本次运行不写盘");
+                            persist_disabled = true;
+                        }
+                    }
                     Persist::default()
                 }
             },
-            Err(_) => {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 let p = import_legacy(&legacy);
                 dirty = !p.days.is_empty();
                 p
+            }
+            Err(e) => {
+                // 暂时读不了（被占用 / 没权限）：既不导入旧文件，也不落盘
+                tracing::warn!("读取 usage.json 失败（{e}），本次运行不写盘");
+                persist_disabled = true;
+                Persist::default()
             }
         };
         Self {
@@ -264,6 +300,7 @@ impl Stats {
                 recent: VecDeque::new(),
                 persist,
                 dirty,
+                persist_disabled,
             }),
         }
     }
@@ -324,7 +361,7 @@ impl Stats {
     /// 有改动时写盘（先写临时文件再改名，避免写一半）
     pub fn save(&self) {
         let mut g = self.inner.lock().unwrap();
-        if !g.dirty {
+        if !g.dirty || g.persist_disabled {
             return;
         }
         if let Ok(json) = serde_json::to_vec(&g.persist) {
@@ -382,10 +419,6 @@ mod tests {
         m
     }
 
-    fn tmp_path(name: &str) -> PathBuf {
-        let dir = tempfile::tempdir().unwrap().keep();
-        dir.join(name)
-    }
 
     #[test]
     fn ingests_once_and_counts_per_model() {
@@ -394,7 +427,8 @@ mod tests {
             ("b", "anthropic", "claude-opus-5-5", Ok(200)),
             ("c", "codex", "gpt-6.2-sol", Err(429)),
         ]);
-        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
         assert!(s.ingest(&m));
         assert!(!s.ingest(&m), "同一批请求不能重复计数");
         let o = s.overview();
@@ -417,7 +451,8 @@ mod tests {
         m.provider_selected("a", "codex", "gpt-6.1-sol", None);
         m.model_resolved("a", "gpt-6.1-sol-fast");
         m.request_completed("a", 200, Some(1), Some(1));
-        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
         s.ingest(&m);
         let o = s.overview();
         let raw = m.snapshot().recent[0].model.clone().unwrap();
@@ -433,15 +468,17 @@ mod tests {
         m.request_completed("x", 200, None, None);
         m.request_started("y", None, None, EndpointKind::Messages);
         m.request_failed("y", Some(400), "Unknown model");
-        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
         assert!(!s.ingest(&m));
         assert_eq!(s.overview().today.count, 0);
     }
 
     #[test]
     fn persists_daily_counts_and_prunes_old_days() {
-        let path = tmp_path("usage.json");
-        let s = Stats::load(path.clone(), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("usage.json");
+        let s = Stats::load(path.clone(), tmp.path().join("stats.json"));
         s.ingest(&monitor_with(&[("a", "codex", "gpt-6.2-sol", Ok(200))]));
         {
             let mut g = s.inner.lock().unwrap();
@@ -449,7 +486,7 @@ mod tests {
         }
         s.ingest(&monitor_with(&[("b", "codex", "gpt-6.2-sol", Ok(200))]));
         s.save();
-        let again = Stats::load(path, tmp_path("stats.json"));
+        let again = Stats::load(path, tmp.path().join("stats.json"));
         let o = again.overview();
         assert_eq!(o.model_use.get("gpt-6.2-sol"), Some(&2), "重启后从文件恢复");
         assert!(o.recent.is_empty(), "最近请求只在内存里");
@@ -458,7 +495,8 @@ mod tests {
 
     #[test]
     fn model_use_covers_last_seven_days_only() {
-        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
         {
             let mut g = s.inner.lock().unwrap();
             for (d, n) in [("2026-11-18", 1), ("2026-11-12", 2), ("2026-11-11", 4)] {
@@ -485,7 +523,8 @@ mod tests {
         for id in ["a", "b"] {
             m.usage_final(id, TokenUsage { cache_read: 100, ..Default::default() });
         }
-        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
         s.ingest(&m);
         let today = day_of(SystemTime::now());
         let c = route_agg(&s, &today, "claude", "claude-opus-5-5");
@@ -501,7 +540,8 @@ mod tests {
 
     #[test]
     fn imports_legacy_stats_json_once() {
-        let dir = tempfile::tempdir().unwrap().keep();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let today = day_of(SystemTime::now());
         let old = days_before(&today, 6);
         let legacy = format!(
@@ -526,7 +566,8 @@ mod tests {
 
     #[test]
     fn prunes_days_older_than_400() {
-        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
         let today = day_of(SystemTime::now());
         let (d400, d399) = (days_before(&today, 400), days_before(&today, 399));
         {
@@ -543,7 +584,8 @@ mod tests {
 
     #[test]
     fn corrupt_usage_json_falls_back_to_empty() {
-        let dir = tempfile::tempdir().unwrap().keep();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let today = day_of(SystemTime::now());
         let legacy_path = dir.join("stats.json");
         std::fs::write(&legacy_path, format!(r#"{{"days":{{"{today}":{{"m":{{"count":3,"errors":0,"ms":1}}}}}}}}"#)).unwrap();
@@ -552,5 +594,33 @@ mod tests {
         let s = Stats::load(usage_path.clone(), legacy_path);
         assert_eq!(s.overview().today.count, 0, "损坏时不导入旧文件");
         assert_eq!(std::fs::read(dir.join("usage.json.bad")).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn corrupt_backup_never_overwrites_existing_bad() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("usage.json.bad"), "first").unwrap();
+        std::fs::write(dir.join("usage.json"), "second corrupt").unwrap();
+        let s = Stats::load(dir.join("usage.json"), dir.join("stats.json"));
+        assert_eq!(s.overview().today.count, 0);
+        assert_eq!(std::fs::read(dir.join("usage.json.bad")).unwrap(), b"first", "旧备份不能丢");
+        assert_eq!(std::fs::read(dir.join("usage.json.bad.1")).unwrap(), b"second corrupt");
+    }
+
+    #[test]
+    fn unreadable_usage_json_does_not_import_or_save() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let today = day_of(SystemTime::now());
+        std::fs::write(dir.join("stats.json"), format!(r#"{{"days":{{"{today}":{{"m":{{"count":3,"errors":0,"ms":1}}}}}}}}"#)).unwrap();
+        // 把 usage.json 建成目录：读它会得到非 NotFound 的错误
+        std::fs::create_dir(dir.join("usage.json")).unwrap();
+        let s = Stats::load(dir.join("usage.json"), dir.join("stats.json"));
+        assert_eq!(s.overview().today.count, 0, "读不了时不导入旧文件");
+        s.ingest(&monitor_with(&[("a", "codex", "gpt-6.2-sol", Ok(200))]));
+        s.save();
+        assert!(dir.join("usage.json").is_dir(), "不落盘，原路径不被覆盖");
+        assert!(!dir.join("usage.json.tmp").exists());
     }
 }
