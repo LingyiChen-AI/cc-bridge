@@ -72,15 +72,15 @@ const activity = {
 };
 
 // 预览校验弹窗：?mock&capi=progress 打开弹窗并停在校验中途；capi=fail 显示失败态
-const STEPS: StepId[] = ['auth', 'format', 'tokenizer', 'signature', 'modelName'];
+const STEPS: StepId[] = ['auth', 'format'];
 export const mockStep = (n: number, fail: boolean): [StepId, StepResult][] =>
-  STEPS.slice(0, n).map((id, i): [StepId, StepResult] => [id, fail && i === n - 1 ? { kind: 'fail', reason: '分词器返回的 token 数与 Claude 不符，疑似非 Claude 模型' } : id === 'signature' ? { kind: 'skip', reason: '未开启思考，跳过' } : { kind: 'pass' }]);
+  STEPS.slice(0, n).map((id, i): [StepId, StepResult] => [id, fail && i === n - 1 ? { kind: 'fail', reason: '不是 Claude（Anthropic Messages）格式的接口' } : { kind: 'pass' }]);
 
 export const mock = {
   invoke: async <T,>(cmd: string, args?: Record<string, unknown>): Promise<T> => {
     if (cmd === 'save_custom_api' || cmd === 'reverify_custom_api') {
-      const fail = String((args?.input as { baseUrl?: string } | undefined)?.baseUrl ?? '').includes('dashscope');
-      return { steps: mockStep(5, fail), authStyle: 'x_api_key', ok: !fail } as T;
+      const fail = String((args?.input as { baseUrl?: string } | undefined)?.baseUrl ?? '').includes('openai');
+      return { steps: mockStep(2, fail), authStyle: 'x_api_key', ok: !fail } as T;
     }
     const r: Record<string, unknown> = { get_status: status, detect_environment: env, test_outbound: 286, refresh_models: models, copy_logs: 3, app_version: '0.1.0', get_activity: activity, preview_start: null, finish_onboarding: null, set_models: null, set_takeover: null, save_config: null, get_update: new URLSearchParams(location.search).has('update') ? { version: '0.2.0', current: '0.1.0', notes: null } : null };
     return r[cmd] as T;

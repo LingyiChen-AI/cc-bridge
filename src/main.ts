@@ -30,7 +30,7 @@ let activity: Overview | null = null;
 
 // 「自己的 Claude API」弹窗状态；密钥只存在这里（内存）和输入框里，不显示、不记录
 interface CapiForm { id: string | null; mask: string; url: string; key: string; model: string; running: boolean; steps: Partial<Record<StepId, StepResult>>; error: string | null; failed: boolean }
-const CAPI_STEPS: StepId[] = ['auth', 'format', 'tokenizer', 'signature', 'modelName'];
+const CAPI_STEPS: StepId[] = ['auth', 'format'];
 let capi: CapiForm | null = null;
 // 删除确认弹窗：待删除条目的 id 与模型名
 let capiDel: { id: string; model: string } | null = null;
@@ -118,17 +118,29 @@ function families(models: string[]) {
 const newErrors = () => (activity?.recent ?? []).some((r) => !r.ok && r.at > seenErrAt);
 
 // ───────── 主界面 ─────────
+const ANIMATED = '.mask, .sheet, .issue, .chk .st.ok, .chk .st.fail, .chk .fix, .done-ic';
+/** 动画元素的身份：类名 + 文本。抽屉、遮罩只认类名（内容随进度变化也算同一个）；步骤图标看所在那一行的文字。 */
+function animKey(n: Element): string {
+  const c = [...n.classList].filter((x) => x !== 'still').join('.');
+  if (n.matches('.mask, .sheet')) return c;
+  const host = n.matches('.st') ? n.parentElement : n;
+  return `${c}|${(host?.textContent ?? '').trim().slice(0, 160)}`;
+}
+
 function renderMain(s: Status) {
   const pill = update
     ? `<button class="pill upd" data-act="open-sheet">${icon.download(13)} ${esc(t('updPill', { version: update.version }))}</button>` : '';
   const body = tab === 'home' ? homeTab(s) : tab === 'models' ? modelsTab(s) : tab === 'feed' ? feedTab(s) : settingsTab(s);
   const tabs: [Tab, string, string][] = [['home', icon.home(20), t('tabHome')], ['models', icon.layers(20), t('tabModels')], ['feed', icon.activity(20), t('tabFeed')], ['settings', icon.settings(20), t('tabSettings')]];
+  // 整页重绘会重建带入场动画的元素，重绘前已在屏上的不再重播动画，否则周期刷新时会一直闪；新出现的照常播放。
+  const seen = new Set([...app.querySelectorAll(ANIMATED)].map(animKey));
   app.innerHTML = `
     <header class="hd">${LOGO}<b>${APP_NAME}</b>${s.devMode ? '<span class="tag">DEV</span>' : ''}<span class="sp"></span>${pill}</header>
     <main class="body" id="body">${body}</main>
     <nav class="tabs" role="tablist">${tabs.map(([k, ic, l]) => `<button role="tab" aria-selected="${tab === k}" class="${tab === k ? 'on' : ''}" data-act="tab" data-tab="${k}">${ic}<span>${l}</span>${
       k === 'feed' && newErrors() ? '<i class="badge"></i>' : k === 'settings' && update ? '<i class="badge acc"></i>' : ''}</button>`).join('')}</nav>
     ${sheetOpen && update ? updateSheet(update) : ''}${capi ? capiSheet(capi) : ''}${capiDel ? capiDelSheet(capiDel) : ''}`;
+  app.querySelectorAll(ANIMATED).forEach((n) => { if (seen.has(animKey(n))) n.classList.add('still'); });
   const logs = document.getElementById('logs');
   if (logs) logs.scrollTop = logs.scrollHeight;
 }
@@ -731,7 +743,7 @@ onEvent<Overview>('activity', (o) => {
   if (cp) {
     const c = status.customApis[cp === 'edit' ? 0 : 1];
     capi = { id: cp === 'edit' ? c.id : null, mask: c.keyMask, url: c.baseUrl, key: '', model: c.model, running: cp === 'progress', steps: {}, error: null, failed: cp === 'fail' };
-    if (cp === 'progress') capi.steps = Object.fromEntries(mockStep(3, false)); else if (cp === 'fail') capi.steps = Object.fromEntries(mockStep(3, true));
+    if (cp === 'progress') capi.steps = Object.fromEntries(mockStep(1, false)); else if (cp === 'fail') capi.steps = Object.fromEntries(mockStep(2, true));
   }
   render();
   if (!status.onboarded) await loadEnv();

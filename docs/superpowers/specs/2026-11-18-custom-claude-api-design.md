@@ -1,5 +1,12 @@
 # 自定义 Claude API 接入设计（2026-11-18）
 
+> **2026-11-19 变更：放宽为 Claude 协议即可接入，只校验认证与响应格式，原分词器/签名/模型名校验移除。**
+> 只要接口说 Claude（Anthropic Messages）协议就允许接入（官方、中转站，以及 Qwen、DeepSeek、Kimi 等的 Claude 兼容接口）。
+> 响应格式只看协议形状：非流式 JSON 为 `type=="message"`、`role=="assistant"`、`content` 是数组、带 `usage`；
+> SSE 在 Messages 事件里以 `message_start` 开头、`message_stop` 结尾（忽略 `ping` 等其它事件）。不再要求 id 以 `msg_` 开头、
+> 返回的模型名与填写的一致。模型名不再要求 `claude-` 开头：1～128 个字符，首字符字母或数字，其余 `[A-Za-z0-9._:/-]`；
+> `fingerprint.rs`（分词基准表）已删除。下文中「必须是真 Claude」「分词器 / 思考签名 / 模型名」相关内容为历史设计，以本段为准。
+
 ## 为什么做
 
 CC Bridge 现在让 Claude Code 在同一个 `/model` 列表里同时用 Claude 订阅（透传）和 ChatGPT 订阅（Codex 翻译）。

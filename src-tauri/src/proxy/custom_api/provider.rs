@@ -382,6 +382,31 @@ mod tests {
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     }
 
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn routes_and_rewrites_non_claude_model_names() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let sse: &'static [u8] = b"event: message_start\ndata: {}\n\n";
+        let (base, task) = fake_upstream(sse).await;
+        let mut e = entry(&base, AuthStyle::Bearer);
+        e.model = "Qwen/Qwen3-Coder:latest".into();
+        set_entries(vec![e]);
+        let reg = crate::proxy::registry::Registry::new(AliasProvider::Anthropic);
+        for name in ["api-Qwen/Qwen3-Coder:latest", "api-Qwen/Qwen3-Coder:latest[1m]", "api-qwen/qwen3-coder:latest"] {
+            assert_eq!(reg.provider_for_model(name, None).unwrap().name(), "custom-api", "{name}");
+        }
+
+        let raw: &'static [u8] = br#"{"model":"api-Qwen/Qwen3-Coder:latest[1m]","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#;
+        let ctx = ctx_for(raw, incoming(), "/v1/messages");
+        let body: MessagesRequest = serde_json::from_slice(raw).unwrap();
+        let resp = CustomApiProvider::new().handle_messages(body, ctx).await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let (_, head, body) = task.await.unwrap();
+        assert_eq!(body["model"], "Qwen/Qwen3-Coder:latest");
+        assert!(head.to_ascii_lowercase().contains("authorization: bearer sk-user-key"));
+        set_entries(vec![]);
+    }
+
     #[test]
     fn routes_api_name_with_1m_suffix() {
         let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());

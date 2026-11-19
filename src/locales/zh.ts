@@ -91,7 +91,7 @@ export const zh = {
   obStartTimeout: "等了 30 秒代理还没就绪，看一下出口代理是否可用，或重试。", obDoneTitle: "好了，可以用了", obDoneSub: "打开一个新的终端，启动 Claude Code，输入 /model 就能看到 Codex 模型。",
   obDoneNoTake: "代理已经在运行。以后在主页点一下大开关就能接管 Claude Code。", moreN: "… 还有 {n} 个", obEnter: "进入主页",
   toastTakeOn: "已接管，新开的 Claude Code 窗口生效", toastTakeOff: "已恢复 Claude Code 原来的配置",
-  capiTitle: "自己的 Claude API", capiAdd: "添加", capiUrl: "接口地址", capiKey: "API 密钥", capiKeyKeep: "留空则沿用 {mask}", capiModel: "模型名", capiSave: "校验并保存", capiVerify: "重新校验", capiEdit: "编辑", capiDel: "删除", capiDelConfirm: "确定删除这个 API？", capiVerified: "已校验", capiFailed: "未通过", capiOk: "校验通过，已保存", capiCancel: "取消", capiStep_auth: "认证", capiStep_format: "响应格式", capiStep_tokenizer: "分词器", capiStep_signature: "思考签名", capiStep_modelName: "模型名", capiHint: "只能接入真正的 Claude。Qwen、DeepSeek 等「Claude 兼容接口」会在校验时被拒绝。", routeApi: "自己的 API",
+  capiTitle: "自己的 Claude API", capiAdd: "添加", capiUrl: "接口地址", capiKey: "API 密钥", capiKeyKeep: "留空则沿用 {mask}", capiModel: "模型名", capiSave: "校验并保存", capiVerify: "重新校验", capiEdit: "编辑", capiDel: "删除", capiDelConfirm: "确定删除这个 API？", capiVerified: "已校验", capiFailed: "未通过", capiOk: "校验通过，已保存", capiCancel: "取消", capiStep_auth: "认证", capiStep_format: "响应格式", capiHint: "支持 Claude（Anthropic Messages）协议的接口都能接入，包括官方、中转站，以及 Qwen、DeepSeek、Kimi 等的 Claude 兼容接口。校验只检查认证和响应格式。", routeApi: "自己的 API",
 };
 
 export type Dict = typeof zh;

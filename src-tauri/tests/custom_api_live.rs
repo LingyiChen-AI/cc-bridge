@@ -7,7 +7,7 @@
 //!
 //! - `relay_*`：真 Claude 中转 → `verify()` 全过；起代理把 `api-<model>` 转给中转，
 //!   用 claude.exe `-p` 走一遍；最后在日志、抓包、CLAUDE_CONFIG_DIR、claude 输出里查 key 后 8 位应为 0 命中。
-//! - `deepseek_*`：DeepSeek 的 Anthropic 兼容接口冒充 `claude-haiku-5-5` → `verify()` 不通过。
+//! - `deepseek_*`：DeepSeek 的 Anthropic 兼容接口（模型 `deepseek-chat`）→ `verify()` 通过（2026-11-19 起只校验认证与响应格式）。
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
@@ -192,11 +192,12 @@ async fn relay_verifies_and_serves_claude_code() {
 
 #[tokio::test]
 #[ignore = "需要 DEEPSEEK_API_KEY 与网络"]
-async fn deepseek_posing_as_claude_is_rejected() {
+async fn deepseek_claude_compatible_api_is_accepted() {
     sandbox();
     let key = secret("DEEPSEEK_API_KEY");
     let base = env_or("DEEPSEEK_BASE", "https://api.deepseek.com/anthropic");
-    let report = verify(&http_client(), &base, &key, MODEL, |_, _| {}).await;
+    let model = env_or("DEEPSEEK_MODEL", "deepseek-chat");
+    let report = verify(&http_client(), &base, &key, &model, |_, _| {}).await;
     println!("[deepseek verify] ok={} auth={:?} {}", report.ok, report.auth_style, describe(&report));
-    assert!(!report.ok, "非 Claude 接口不应通过校验");
+    assert!(report.ok, "Claude 协议兼容接口应通过校验：{}", describe(&report));
 }

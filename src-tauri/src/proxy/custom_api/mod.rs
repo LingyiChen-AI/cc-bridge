@@ -1,6 +1,5 @@
 //! 自定义 Claude API：用户自带 base URL / key / model，在 Claude Code `/model` 里显示为 `api-<model>`。
 //! 本模块只含数据模型、校验规则与进程内全局路由表（客户端经 `set_entries` 整体替换）。
-pub mod fingerprint;
 pub mod provider;
 pub mod verify;
 
@@ -47,15 +46,20 @@ static ENTRIES: RwLock<Vec<(String, CustomApi)>> = RwLock::new(Vec::new());
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// 模型名必须匹配 `^claude-[a-z0-9-]+$`。
+/// 模型名：1～128 个字符，首字符为字母或数字，其余只能是字母、数字和 `. _ : / -`
+/// （覆盖 `qwen3-max`、`Qwen/Qwen3-Coder`、`kimi-k2:latest` 等写法；不许空格、引号、`[` 等，
+/// 后者会和 Claude Code 的 `[1m]` 后缀冲突）。
 pub fn validate_model(model: &str) -> Result<(), String> {
-    let ok = model
-        .strip_prefix("claude-")
-        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'));
+    let b = model.as_bytes();
+    let ok = (1..=128).contains(&b.len())
+        && b[0].is_ascii_alphanumeric()
+        && b[1..].iter().all(|c| c.is_ascii_alphanumeric() || b"._:/-".contains(c));
     if ok {
         Ok(())
     } else {
-        Err(format!("模型名需为官方 Claude 模型 ID（claude-xxx，仅小写字母、数字、连字符）：{model}"))
+        Err(format!(
+            "模型名需为 1～128 个字符，以字母或数字开头，只能包含字母、数字和 . _ : / -：{model}"
+        ))
     }
 }
 
@@ -98,17 +102,18 @@ pub fn mask_key(key: &str) -> String {
 }
 
 /// 已验证条目按顺序生成 `api-<model>`，重名依次加 `-2`、`-3`…
+/// 判重不区分大小写（`lookup` 也不区分），并跳过已被别的条目占用的名字（如模型本身就叫 `x-2`）。
 pub fn picker_names(entries: &[CustomApi]) -> Vec<(String, CustomApi)> {
-    let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    let mut taken: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut out = Vec::new();
     for e in entries.iter().filter(|e| e.verified_at.is_some()) {
-        let n = counts.entry(e.model.as_str()).or_insert(0);
-        *n += 1;
-        let name = if *n == 1 {
-            format!("api-{}", e.model)
-        } else {
-            format!("api-{}-{}", e.model, n)
-        };
+        let base = format!("api-{}", e.model);
+        let mut name = base.clone();
+        let mut n = 1;
+        while !taken.insert(name.to_ascii_lowercase()) {
+            n += 1;
+            name = format!("{base}-{n}");
+        }
         out.push((name, e.clone()));
     }
     out
@@ -125,7 +130,7 @@ pub fn lookup(picker_name: &str) -> Option<CustomApi> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .iter()
-        .find(|(n, _)| *n == name)
+        .find(|(n, _)| n.eq_ignore_ascii_case(&name))
         .map(|(_, e)| e.clone())
 }
 
@@ -147,17 +152,34 @@ mod tests {
     }
 
     #[test]
-    fn validate_model_accepts_official_ids() {
-        for ok in ["claude-opus-5-5", "claude-haiku-4-5-20251001", "claude-fable-5-1"] {
+    fn validate_model_accepts_compatible_ids() {
+        let (ok_long, bad_long) = ("m".repeat(128), "m".repeat(129));
+        for ok in [
+            "claude-opus-5-5",
+            "claude-haiku-4-5-20251001",
+            "qwen3-max",
+            "deepseek-chat",
+            "Qwen/Qwen3-Coder",
+            "kimi-k2:latest",
+            "us.anthropic.claude-opus-5-5-v1:0",
+            "glm_4.6",
+            "a",
+            ok_long.as_str(),
+        ] {
             assert!(validate_model(ok).is_ok(), "{ok}");
         }
         for bad in [
-            "us.anthropic.claude-opus-5-5-v1:0",
-            "claude-opus-5-5@20260101",
-            "qwen3-max",
-            "Claude-Opus",
-            "claude-opus 5",
             "",
+            "claude opus",
+            " qwen3-max",
+            "qwen\"max",
+            "qwen'max",
+            "claude-opus-5-5[1m]",
+            "claude-opus-5-5@20260101",
+            "-qwen",
+            "/qwen",
+            "模型",
+            bad_long.as_str(),
         ] {
             assert!(validate_model(bad).is_err(), "{bad}");
         }
@@ -242,6 +264,49 @@ mod tests {
         assert_eq!(lookup("api-claude-opus-5-5[1m]").unwrap().id, "1");
         assert_eq!(picker_list(), ["api-claude-opus-5-5"]);
         assert!(lookup("claude-opus-5-5").is_none());
+        set_entries(vec![]);
+    }
+
+    fn verified(id: &str, model: &str) -> CustomApi {
+        CustomApi {
+            id: id.into(),
+            base_url: "https://a".into(),
+            api_key: "k".into(),
+            model: model.into(),
+            auth_style: AuthStyle::XApiKey,
+            verified_at: Some(1),
+        }
+    }
+
+    #[test]
+    fn picker_names_unique_ignoring_case_and_collisions() {
+        let names: Vec<String> = picker_names(&[
+            verified("1", "Qwen/Qwen3-Coder"),
+            verified("2", "qwen/qwen3-coder"),
+            verified("3", "x"),
+            verified("4", "x-2"),
+            verified("5", "x"),
+        ])
+        .into_iter()
+        .map(|(n, _)| n)
+        .collect();
+        assert_eq!(names, ["api-Qwen/Qwen3-Coder", "api-qwen/qwen3-coder-2", "api-x", "api-x-2", "api-x-3"]);
+    }
+
+    #[test]
+    fn lookup_handles_slash_colon_and_case() {
+        let _g = lock();
+        set_entries(vec![
+            verified("1", "Qwen/Qwen3-Coder"),
+            verified("2", "kimi-k2:latest"),
+            verified("3", "deepseek-chat"),
+        ]);
+        assert_eq!(lookup("api-Qwen/Qwen3-Coder").unwrap().id, "1");
+        assert_eq!(lookup("api-qwen/qwen3-coder[1M]").unwrap().id, "1");
+        assert_eq!(lookup("api-kimi-k2:latest[1m]").unwrap().id, "2");
+        assert_eq!(lookup("api-deepseek-chat").unwrap().model, "deepseek-chat");
+        assert!(lookup("api-kimi-k2").is_none());
+        assert_eq!(picker_list(), ["api-Qwen/Qwen3-Coder", "api-kimi-k2:latest", "api-deepseek-chat"]);
         set_entries(vec![]);
     }
 }

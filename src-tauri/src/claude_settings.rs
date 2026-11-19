@@ -124,7 +124,8 @@ pub fn revoke_takeover(doc: &mut Value, rec: &mut TakeoverRecord) -> Vec<String>
     let root = obj(doc);
     // 接管期间 base_url 指向本代理，此时 model 里任何非 Claude 模型都只能是经由本代理选的 Codex 模型
     // （包括以前勾选过、现在已取消勾选的，或在 /model 里手动输入的），一律恢复。
-    let ours = |m: &str| rec.models.iter().any(|x| x == m) || !is_claude_model(m);
+    // `api-` 开头的是本代理的自定义 API 条目，模型名可以是任意兼容模型（甚至含 anthropic 字样），同样恢复。
+    let ours = |m: &str| rec.models.iter().any(|x| x == m) || m.starts_with("api-") || !is_claude_model(m);
 
     if root.get("model").and_then(Value::as_str).is_some_and(ours) {
         match rec.prev_model.clone().flatten() {
@@ -325,5 +326,45 @@ mod tests {
         revoke_takeover(&mut doc, &mut rec);
         assert_eq!(doc["model"], "opus");
         assert!(doc.get("modelPicker").is_none());
+    }
+
+    #[test]
+    fn non_claude_api_models_roundtrip_through_settings() {
+        use crate::proxy::custom_api::{AuthStyle, CustomApi, TEST_LOCK, picker_list, set_entries};
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let e = |id: &str, model: &str| CustomApi {
+            id: id.into(),
+            base_url: "https://dashscope.example.com/apps/anthropic".into(),
+            api_key: "k".into(),
+            model: model.into(),
+            auth_style: AuthStyle::Bearer,
+            verified_at: Some(1),
+        };
+        set_entries(vec![e("1", "Qwen/Qwen3-Coder"), e("2", "kimi-k2:latest"), e("3", "anthropic/claude-x")]);
+        let names = picker_list();
+        let mut doc = json!({"model":"opus"});
+        let mut rec = TakeoverRecord::default();
+        apply_takeover(&mut doc, &mut rec, URL, &names);
+        let opts = doc["modelPicker"]["options"].as_array().unwrap();
+        assert_eq!(
+            opts[0],
+            json!({"model":"api-Qwen/Qwen3-Coder","label":"API Qwen/Qwen3-Coder","description":"自己的 API · dashscope.example.com"})
+        );
+        assert_eq!(opts[1]["model"], "api-kimi-k2:latest");
+        // 写进 settings.json 再读回，模型名原样保留（`/`、`:`、大写都不转义、不改写）。
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("settings.json");
+        write_settings(&p, &doc).unwrap();
+        let back = read_settings(&p).unwrap();
+        assert_eq!(back["modelPicker"]["options"][0]["model"], "api-Qwen/Qwen3-Coder");
+        // 选中过的自定义条目（含名字里带 anthropic 的）撤销时都恢复成原模型。
+        for m in ["api-Qwen/Qwen3-Coder", "api-anthropic/claude-x"] {
+            let (mut d, mut r) = (doc.clone(), rec.clone());
+            d["model"] = json!(m);
+            r.models.retain(|x| x != m);
+            revoke_takeover(&mut d, &mut r);
+            assert_eq!(d["model"], "opus", "{m}");
+        }
+        set_entries(vec![]);
     }
 }
