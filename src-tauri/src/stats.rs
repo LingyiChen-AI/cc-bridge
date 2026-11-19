@@ -2,8 +2,9 @@
 //! - 最近 200 条请求只放内存，「动态」页展示；
 //! - 按「天 × 线路 × 模型」汇总调用次数 / 出错次数 / 总耗时 / 四项 token，写进 usage.json，保留 400 天；
 //! - 首次启动（没有 usage.json）时一次性导入旧的 stats.json（只读，不改不删）。
-use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::path::PathBuf;
+use std::collections::{BTreeMap, BTreeSet, HashSet, VecDeque};
+use std::ops::Bound;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::SystemTime;
 
@@ -196,6 +197,150 @@ pub struct Overview {
     pub today: Today,
     /// 近 7 天（含今天）每个模型的调用次数
     pub model_use: BTreeMap<String, u64>,
+}
+
+/// 报表的时间粒度
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Granularity {
+    Day,
+    Month,
+}
+
+impl Granularity {
+    /// 只认 "day" / "month"
+    pub fn parse(s: &str) -> Result<Self, String> {
+        match s {
+            "day" => Ok(Self::Day),
+            "month" => Ok(Self::Month),
+            other => Err(format!("不支持的粒度：{other}")),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Day => "day",
+            Self::Month => "month",
+        }
+    }
+}
+
+/// 报表查询条件：日期为本地时区的 YYYY-MM-DD
+#[derive(Debug, Clone, Deserialize)]
+pub struct ReportQuery {
+    pub from: String,
+    pub to: String,
+    pub granularity: Granularity,
+    pub route: Option<String>,
+    pub model: Option<String>,
+}
+
+/// 一组汇总数；`cost_usd` 是按价格表折算的「等价 API 价」，没有价格的模型不计入
+#[derive(Debug, Default, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Totals {
+    pub count: u64,
+    pub errors: u64,
+    pub ms: u64,
+    /// 未命中缓存的输入
+    pub input: u64,
+    pub cache_read: u64,
+    /// 缓存写（5 分钟 + 1 小时）
+    pub cache_write: u64,
+    pub output: u64,
+    pub cost_usd: f64,
+}
+
+impl Totals {
+    fn add_agg(&mut self, a: &Agg, cost: f64) {
+        self.count += a.n;
+        self.errors += a.e;
+        self.ms += a.ms;
+        self.input += a.input;
+        self.cache_read += a.cr;
+        self.cache_write += a.cw + a.cw1h;
+        self.output += a.out;
+        self.cost_usd += cost;
+    }
+
+    fn add(&mut self, o: &Totals) {
+        self.count += o.count;
+        self.errors += o.errors;
+        self.ms += o.ms;
+        self.input += o.input;
+        self.cache_read += o.cache_read;
+        self.cache_write += o.cache_write;
+        self.output += o.output;
+        self.cost_usd += o.cost_usd;
+    }
+
+    fn tokens(&self) -> u64 {
+        self.input + self.cache_read + self.cache_write + self.output
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRow {
+    pub route: String,
+    pub model: String,
+    pub totals: Totals,
+    /// 有价格表条目（金额才有意义）
+    pub priced: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Bucket {
+    /// 日桶 YYYY-MM-DD，月桶 YYYY-MM
+    pub key: String,
+    pub by_route: BTreeMap<String, Totals>,
+    /// 按金额降序、再按 token 总量降序
+    pub models: Vec<ModelRow>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageReport {
+    /// 夹取后的实际范围
+    pub from: String,
+    pub to: String,
+    pub granularity: String,
+    /// 范围天数（含空天）
+    pub days: u32,
+    pub totals: Totals,
+    pub by_route: BTreeMap<String, Totals>,
+    /// 只含有数据的桶，空桶由前端补零
+    pub buckets: Vec<Bucket>,
+    /// 有请求或 token 但没有价格的模型名（去重、字典序）
+    pub unpriced_models: Vec<String>,
+    /// 范围内出现过的全部线路 / 模型（不受 route / model 过滤影响，给筛选下拉用）
+    pub routes: Vec<String>,
+    pub models: Vec<String>,
+}
+
+/// 夹取后的范围与天数
+fn clamp_range(q: &ReportQuery, today: &str) -> (String, String, u32) {
+    let today_d: jiff::civil::Date = today.parse().unwrap_or_default();
+    let parse = |s: &str| s.parse::<jiff::civil::Date>().unwrap_or(today_d);
+    let (mut from, mut to) = (parse(&q.from), parse(&q.to));
+    if from > to {
+        std::mem::swap(&mut from, &mut to);
+    }
+    let earliest = today_d.checked_sub(jiff::Span::new().days(KEEP_DAYS - 1)).unwrap_or(today_d);
+    from = from.max(earliest).min(today_d);
+    to = to.min(today_d).max(from);
+    let days = (to - from).get_days().max(0) as u32 + 1;
+    (from.to_string(), to.to_string(), days)
+}
+
+/// CSV 字段：含逗号 / 引号 / 换行时加引号
+fn csv_field(s: &str) -> String {
+    if s.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", s.replace('"', "\"\""))
+    } else {
+        s.to_string()
+    }
 }
 
 struct Inner {
@@ -399,6 +544,125 @@ impl Stats {
             }
         }
         Overview { recent: g.recent.iter().take(RECENT_SHOWN).cloned().collect(), today: t, model_use }
+    }
+
+    /// 范围内按「桶 × 线路 × 模型」归并（已套用线路 / 模型过滤）；同时返回范围内全部线路与模型
+    #[allow(clippy::type_complexity)]
+    fn collect(
+        &self,
+        q: &ReportQuery,
+        from: &str,
+        to: &str,
+    ) -> (BTreeMap<(String, String, String), Agg>, BTreeSet<String>, BTreeSet<String>) {
+        let g = self.inner.lock().unwrap();
+        let mut rows: BTreeMap<(String, String, String), Agg> = BTreeMap::new();
+        let (mut routes, mut models) = (BTreeSet::new(), BTreeSet::new());
+        for (day, by_route) in g.persist.days.range::<str, _>((Bound::Included(from), Bound::Included(to))) {
+            let key = match q.granularity {
+                Granularity::Day => day.clone(),
+                Granularity::Month => day.get(..7).unwrap_or(day).to_string(),
+            };
+            for (route, by_model) in by_route {
+                for (model, a) in by_model {
+                    routes.insert(route.clone());
+                    models.insert(model.clone());
+                    if q.route.as_deref().is_some_and(|r| r != route) || q.model.as_deref().is_some_and(|m| m != model) {
+                        continue;
+                    }
+                    rows.entry((key.clone(), route.clone(), model.clone())).or_default().merge(a);
+                }
+            }
+        }
+        (rows, routes, models)
+    }
+
+    /// 某线路某模型的等价 API 价；没有价格返回 None
+    fn cost_of(route: &str, model: &str, a: &Agg) -> Option<f64> {
+        crate::pricing::price_for(route, model).map(|p| crate::pricing::cost_usd(&a.usage(), p))
+    }
+
+    pub fn report(&self, q: &ReportQuery) -> UsageReport {
+        self.report_at(q, &day_of(SystemTime::now()))
+    }
+
+    fn report_at(&self, q: &ReportQuery, today: &str) -> UsageReport {
+        let (from, to, days) = clamp_range(q, today);
+        let (rows, routes, models) = self.collect(q, &from, &to);
+        let mut totals = Totals::default();
+        let mut by_route: BTreeMap<String, Totals> = BTreeMap::new();
+        let mut unpriced = BTreeSet::new();
+        let mut buckets: Vec<Bucket> = Vec::new();
+        // rows 按 (桶, 线路, 模型) 有序，同桶的行相邻
+        for ((key, route, model), a) in &rows {
+            let cost = Self::cost_of(route, model, a);
+            if cost.is_none() && (a.n > 0 || a.usage().input + a.cr + a.cw + a.cw1h + a.out > 0) {
+                unpriced.insert(model.clone());
+            }
+            let mut t = Totals::default();
+            t.add_agg(a, cost.unwrap_or(0.0));
+            totals.add(&t);
+            by_route.entry(route.clone()).or_default().add(&t);
+            if buckets.last().is_none_or(|b| &b.key != key) {
+                buckets.push(Bucket { key: key.clone(), by_route: BTreeMap::new(), models: Vec::new() });
+            }
+            let b = buckets.last_mut().unwrap();
+            b.by_route.entry(route.clone()).or_default().add(&t);
+            b.models.push(ModelRow { route: route.clone(), model: model.clone(), totals: t, priced: cost.is_some() });
+        }
+        for b in &mut buckets {
+            b.models.sort_by(|x, y| {
+                y.totals
+                    .cost_usd
+                    .total_cmp(&x.totals.cost_usd)
+                    .then(y.totals.tokens().cmp(&x.totals.tokens()))
+                    .then(x.model.cmp(&y.model))
+            });
+        }
+        UsageReport {
+            from,
+            to,
+            granularity: q.granularity.as_str().to_string(),
+            days,
+            totals,
+            by_route,
+            buckets,
+            unpriced_models: unpriced.into_iter().collect(),
+            routes: routes.into_iter().collect(),
+            models: models.into_iter().collect(),
+        }
+    }
+
+    /// 导出 CSV 到 dir：UTF-8 BOM、金额 6 位小数、未知价格留空；返回文件路径
+    pub fn export_csv(&self, q: &ReportQuery, dir: &Path) -> std::io::Result<PathBuf> {
+        let (from, to, _) = clamp_range(q, &day_of(SystemTime::now()));
+        let (rows, _, _) = self.collect(q, &from, &to);
+        let mut out = String::from("\u{feff}");
+        out.push_str(
+            "period,route,model,requests,errors,avg_ms,input_uncached,cache_read,cache_write_5m,cache_write_1h,output,cost_usd\n",
+        );
+        for ((key, route, model), a) in &rows {
+            let cost = Self::cost_of(route, model, a).map(|c| format!("{c:.6}")).unwrap_or_default();
+            let avg = a.ms.checked_div(a.n).unwrap_or(0);
+            out.push_str(&format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                csv_field(key),
+                csv_field(route),
+                csv_field(model),
+                a.n,
+                a.e,
+                avg,
+                a.input,
+                a.cr,
+                a.cw,
+                a.cw1h,
+                a.out,
+                cost
+            ));
+        }
+        std::fs::create_dir_all(dir)?;
+        let path = dir.join(format!("cc-bridge-usage-{from}_{to}.csv"));
+        std::fs::write(&path, out)?;
+        Ok(path)
     }
 }
 
@@ -622,5 +886,146 @@ mod tests {
         s.save();
         assert!(dir.join("usage.json").is_dir(), "不落盘，原路径不被覆盖");
         assert!(!dir.join("usage.json.tmp").exists());
+    }
+
+    // ---------- 报表 ----------
+
+    /// 直接往汇总里放一条
+    fn put(s: &Stats, day: &str, route: &str, model: &str, a: Agg) {
+        let mut g = s.inner.lock().unwrap();
+        g.persist.days.entry(day.into()).or_default().entry(route.into()).or_default().insert(model.into(), a);
+    }
+
+    fn agg(n: u64, input: u64, out: u64) -> Agg {
+        Agg { n, input, out, ..Default::default() }
+    }
+
+    fn empty_stats() -> (tempfile::TempDir, Stats) {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Stats::load(tmp.path().join("usage.json"), tmp.path().join("stats.json"));
+        (tmp, s)
+    }
+
+    fn q(from: &str, to: &str, g: Granularity) -> ReportQuery {
+        ReportQuery { from: from.into(), to: to.into(), granularity: g, route: None, model: None }
+    }
+
+    #[test]
+    fn report_sums_cost_for_priced_models() {
+        let (_t, s) = empty_stats();
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 1_000_000, 1_000_000));
+        let r = s.report_at(&q("2026-11-19", "2026-11-19", Granularity::Day), "2026-11-19");
+        assert_eq!(r.totals.cost_usd, 24.0);
+        assert_eq!(r.by_route["claude"].cost_usd, 24.0);
+        assert!(r.unpriced_models.is_empty());
+        assert!(r.buckets[0].models[0].priced);
+    }
+
+    #[test]
+    fn api_and_codex_routes_are_unpriced() {
+        let (_t, s) = empty_stats();
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 1_000_000, 1_000_000));
+        put(&s, "2026-11-19", "api", "api-claude-opus-5-5", agg(1, 10, 20));
+        put(&s, "2026-11-18", "codex", "gpt-6.1-sol", agg(2, 100, 200));
+        put(&s, "2026-11-19", "codex", "gpt-6.1-sol", agg(1, 1, 2));
+        let r = s.report_at(&q("2026-11-18", "2026-11-19", Granularity::Day), "2026-11-19");
+        assert_eq!(r.totals.cost_usd, 24.0);
+        assert_eq!(r.totals.input, 1_000_000 + 10 + 100 + 1);
+        assert_eq!(r.unpriced_models, vec!["api-claude-opus-5-5", "gpt-6.1-sol"]);
+    }
+
+    #[test]
+    fn report_clamps_range_and_buckets_by_month() {
+        let (_t, s) = empty_stats();
+        put(&s, "2026-10-30", "claude", "claude-opus-5-5", agg(1, 1, 1));
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 1, 1));
+        // 倒序 + 按月
+        let r = s.report_at(&q("2026-11-19", "2026-10-25", Granularity::Month), "2026-11-19");
+        assert_eq!(r.from, "2026-10-25");
+        assert_eq!(r.to, "2026-11-19");
+        assert_eq!(r.days, 26);
+        let keys: Vec<_> = r.buckets.iter().map(|b| b.key.as_str()).collect();
+        assert_eq!(keys, ["2026-10", "2026-11"]);
+        assert_eq!(r.granularity, "month");
+        // from 太早：夹到 今天 − 399 天；to 太晚：夹到今天
+        let r = s.report_at(&q("2020-01-01", "2030-01-01", Granularity::Day), "2026-11-19");
+        assert_eq!(r.from, "2025-10-16");
+        assert_eq!(r.to, "2026-11-19");
+        assert_eq!(r.days, 400);
+    }
+
+    #[test]
+    fn report_filters_route_and_model_but_lists_all_options() {
+        let (_t, s) = empty_stats();
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 5, 5));
+        put(&s, "2026-11-19", "codex", "gpt-6.1-sol", agg(3, 7, 7));
+        let mut query = q("2026-11-19", "2026-11-19", Granularity::Day);
+        query.route = Some("codex".into());
+        let r = s.report_at(&query, "2026-11-19");
+        assert_eq!(r.totals.count, 3);
+        assert_eq!(r.totals.input, 7);
+        assert!(!r.by_route.contains_key("claude"));
+        assert_eq!(r.routes, vec!["claude", "codex"]);
+        assert_eq!(r.models, vec!["claude-opus-5-5", "gpt-6.1-sol"]);
+        // 按模型过滤
+        let mut query = q("2026-11-19", "2026-11-19", Granularity::Day);
+        query.model = Some("claude-opus-5-5".into());
+        let r = s.report_at(&query, "2026-11-19");
+        assert_eq!(r.totals.count, 1);
+        assert_eq!(r.buckets[0].models.len(), 1);
+    }
+
+    #[test]
+    fn cache_hit_inputs_are_separate() {
+        let (_t, s) = empty_stats();
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", Agg { n: 1, input: 10, cr: 20, cw: 30, cw1h: 40, out: 50, ..Default::default() });
+        let r = s.report_at(&q("2026-11-19", "2026-11-19", Granularity::Day), "2026-11-19");
+        assert_eq!((r.totals.input, r.totals.cache_read, r.totals.cache_write, r.totals.output), (10, 20, 70, 50));
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["totals"]["cacheRead"], 20);
+        assert_eq!(v["byRoute"]["claude"]["cacheWrite"], 70);
+        assert!(v["unpricedModels"].is_array());
+    }
+
+    #[test]
+    fn models_sorted_by_cost_then_tokens() {
+        let (_t, s) = empty_stats();
+        put(&s, "2026-11-19", "codex", "gpt-6.1-sol", agg(1, 9_000_000, 0));
+        put(&s, "2026-11-19", "claude", "claude-sonnet-5", agg(1, 1_000_000, 0));
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 1_000_000, 0));
+        let r = s.report_at(&q("2026-11-19", "2026-11-19", Granularity::Day), "2026-11-19");
+        let names: Vec<_> = r.buckets[0].models.iter().map(|m| m.model.as_str()).collect();
+        assert_eq!(names, ["claude-opus-5-5", "claude-sonnet-5", "gpt-6.1-sol"]);
+    }
+
+    #[test]
+    fn granularity_parses_only_day_and_month() {
+        assert_eq!(Granularity::parse("day"), Ok(Granularity::Day));
+        assert_eq!(Granularity::parse("month"), Ok(Granularity::Month));
+        assert!(Granularity::parse("week").is_err());
+    }
+
+    #[test]
+    fn export_csv_writes_bom_and_header() {
+        let (_t, s) = empty_stats();
+        let today = day_of(SystemTime::now());
+        put(&s, &today, "claude", "claude-opus-5-5", Agg { n: 2, e: 1, ms: 300, input: 1_000_000, out: 1_000_000, ..Default::default() });
+        put(&s, &today, "codex", "gpt-6.1-sol", agg(1, 5, 6));
+        let out = tempfile::tempdir().unwrap();
+        let path = s.export_csv(&q(&today, &today, Granularity::Day), out.path()).unwrap();
+        assert_eq!(path.file_name().unwrap().to_string_lossy(), format!("cc-bridge-usage-{today}_{today}.csv"));
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[..3], &[0xEF, 0xBB, 0xBF]);
+        let text = String::from_utf8(bytes[3..].to_vec()).unwrap();
+        let lines: Vec<_> = text.lines().collect();
+        assert_eq!(
+            lines[0],
+            "period,route,model,requests,errors,avg_ms,input_uncached,cache_read,cache_write_5m,cache_write_1h,output,cost_usd"
+        );
+        let claude = lines.iter().find(|l| l.contains("claude-opus-5-5")).unwrap();
+        assert!(claude.ends_with(",24.000000"), "{claude}");
+        assert!(claude.contains(",2,1,150,"), "{claude}");
+        let codex = lines.iter().find(|l| l.contains("gpt-6.1-sol")).unwrap();
+        assert!(codex.ends_with(','), "未知价格留空：{codex}");
     }
 }
