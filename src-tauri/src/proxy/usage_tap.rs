@@ -52,6 +52,10 @@ pub struct UsageTap {
     seen: bool,
     /// 是否见过 cache_creation 的 TTL 细分
     split_seen: bool,
+    /// message_start 的 input/cache 是本地估算值（GPT 线路由翻译层按请求体估算）
+    estimated_start: bool,
+    /// SSE 是否见过顶层 usage（message_delta），即上游给出的确定值
+    delta_seen: bool,
 }
 
 impl UsageTap {
@@ -67,7 +71,19 @@ impl UsageTap {
             usage: TokenUsage::default(),
             seen: false,
             split_seen: false,
+            estimated_start: false,
+            delta_seen: false,
         }
+    }
+
+    /// 标记 message_start 里的 input/cache 为估算值。
+    ///
+    /// 取舍：上游中途出错不会发 message_delta，此时 message_start 的估算 input（含缓存）
+    /// 不能当终值计费，finish 只保留 output、input/cache 记 0（宁可少计不多计）。
+    /// 只对 GPT（codex）线路开启；Claude 透传的 message_start 是上游真实值，照常保留。
+    pub fn with_estimated_start(mut self, estimated: bool) -> Self {
+        self.estimated_start = estimated;
+        self
     }
 
     pub fn feed(&mut self, chunk: &[u8]) {
@@ -125,7 +141,15 @@ impl UsageTap {
         {
             self.apply(u);
         }
-        self.seen.then_some(self.usage)
+        if !self.seen {
+            return None;
+        }
+        if self.sse && self.estimated_start && !self.delta_seen {
+            // 从未拿到上游确定值：丢弃估算的 input/cache，只留 output
+            let usage = TokenUsage { output: self.usage.output, ..TokenUsage::default() };
+            return (!usage.is_empty()).then_some(usage);
+        }
+        Some(self.usage)
     }
 
     /// 只解析以 `data:` 开头且含 `"usage"` 的行。
@@ -146,7 +170,8 @@ impl UsageTap {
         if let Some(u) = v.get("message").and_then(|m| m.get("usage")) {
             self.apply(u);
         }
-        if let Some(u) = v.get("usage") {
+        if let Some(u) = v.get("usage").filter(|u| u.is_object()) {
+            self.delta_seen = true;
             self.apply(u);
         }
     }
@@ -261,6 +286,57 @@ mod tests {
         assert_eq!(u.input, 120);
         assert_eq!(u.cache_read, 8800);
         assert_eq!(u.output, 30);
+    }
+
+    #[test]
+    fn estimated_start_without_delta_keeps_only_output() {
+        // GPT 线路中途出错：只有 message_start（估算 input），没有 message_delta
+        let s = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9000,\"cache_read_input_tokens\":500,\"output_tokens\":0}}}
+
+",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}
+
+",
+        );
+        let mut t = sse_tap().with_estimated_start(true);
+        t.feed(s.as_bytes());
+        assert_eq!(t.finish(), None, "估算 input 不能当终值，output 也为 0 时不记 usage");
+
+        let s = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9000,\"output_tokens\":3}}}
+
+";
+        let mut t = sse_tap().with_estimated_start(true);
+        t.feed(s.as_bytes());
+        assert_eq!(t.finish(), Some(TokenUsage { output: 3, ..TokenUsage::default() }));
+    }
+
+    #[test]
+    fn estimated_start_with_delta_uses_delta_values() {
+        let s = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9000}}}
+
+",
+            "data: {\"type\":\"message_delta\",\"usage\":{\"input_tokens\":120,\"cache_read_input_tokens\":8800,\"output_tokens\":30}}
+
+",
+        );
+        let mut t = sse_tap().with_estimated_start(true);
+        t.feed(s.as_bytes());
+        let u = t.finish().unwrap();
+        assert_eq!((u.input, u.cache_read, u.output), (120, 8800, 30));
+    }
+
+    #[test]
+    fn real_start_without_delta_keeps_input() {
+        // Claude 透传：message_start 是真实值，未见 delta 也保留
+        let s = "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":12,\"cache_read_input_tokens\":3000,\"output_tokens\":1}}}
+
+";
+        let mut t = sse_tap();
+        t.feed(s.as_bytes());
+        let u = t.finish().unwrap();
+        assert_eq!((u.input, u.cache_read, u.output), (12, 3000, 1));
     }
 
     #[test]

@@ -1767,6 +1767,8 @@ async fn dispatch_request(
         }
         monitor.provider_selected(&req_id, provider.name(), &normalized_model, effort);
     }
+    // GPT 线路的 message_start 带的是本地估算 input，未见 message_delta 时不能当终值
+    let request_guard = request_guard.with_estimated_start_usage(provider.name() == "codex");
 
     let traffic = create_traffic_capture(TrafficCaptureOptions {
         req_id: req_id.clone(),
@@ -2156,6 +2158,8 @@ struct RequestMonitorGuard {
     track_usage: bool,
     /// 响应体的 usage 解析器；终态（完成 / 失败 / 中途丢弃）前先 finish 并上报
     usage_tap: Option<UsageTap>,
+    /// message_start 的 input/cache 是本地估算（GPT/codex 线路），见 UsageTap::with_estimated_start
+    estimated_start_usage: bool,
 }
 
 impl RequestMonitorGuard {
@@ -2165,7 +2169,13 @@ impl RequestMonitorGuard {
             req_id,
             track_usage: false,
             usage_tap: None,
+            estimated_start_usage: false,
         }
+    }
+
+    fn with_estimated_start_usage(mut self, estimated: bool) -> Self {
+        self.estimated_start_usage = estimated;
+        self
     }
 
     fn with_usage_tracking(mut self, enabled: bool) -> Self {
@@ -2176,7 +2186,8 @@ impl RequestMonitorGuard {
     /// 开启了 usage 跟踪时按 content-type 建解析器
     fn start_usage_tap(&mut self, content_type: Option<&str>) {
         if self.track_usage {
-            self.usage_tap = Some(UsageTap::new(content_type));
+            self.usage_tap =
+                Some(UsageTap::new(content_type).with_estimated_start(self.estimated_start_usage));
         }
     }
 
@@ -2564,6 +2575,34 @@ mod usage_tap_tests {
         let usage = state.recent[0].usage.unwrap();
         assert_eq!(usage.cache_read, 8800);
         assert_eq!(usage.output, 30);
+    }
+
+    #[tokio::test]
+    async fn codex_stream_error_drops_estimated_input() {
+        let m = MonitorHandle::new(10);
+        m.request_started("u5", None, None, EndpointKind::Messages);
+        let guard = RequestMonitorGuard::new(Some(m.clone()), "u5".to_string())
+            .with_usage_tracking(true)
+            .with_estimated_start_usage(true);
+        let chunks: Vec<Result<Bytes, std::io::Error>> = vec![
+            Ok(Bytes::from_static(
+                b"event: message_start
+data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":9000,\"output_tokens\":2}}}
+
+",
+            )),
+            Err(std::io::Error::other("upstream reset")),
+        ];
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "text/event-stream")
+            .body(Body::from_stream(futures_util::stream::iter(chunks)))
+            .unwrap();
+        drain(monitor_response_body(response, guard)).await;
+        let state = m.snapshot();
+        assert_eq!(state.recent[0].status, RequestStatus::Failed);
+        let usage = state.recent[0].usage.unwrap();
+        assert_eq!((usage.input, usage.output), (0, 2), "估算 input 不计，output 照记");
     }
 
     #[tokio::test]
