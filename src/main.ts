@@ -5,6 +5,7 @@ import { LANGS, setLang, t, trError } from './i18n';
 import { toast } from './toast';
 import { mockStep } from './mock';
 import { anySelectOpen, installSelects, renderSelect, selectValue } from './select';
+import { chartInput, mountUsageChart } from './usage-chart';
 
 type Tone = 'ok' | 'warn' | 'err';
 type Tab = 'home' | 'models' | 'feed' | 'settings';
@@ -152,6 +153,9 @@ function renderMain(s: Status) {
       k === 'feed' && newErrors() ? '<i class="badge"></i>' : k === 'settings' && update ? '<i class="badge acc"></i>' : ''}</button>`).join('')}</nav>
     ${sheetOpen && update ? updateSheet(update) : ''}${capi ? capiSheet(capi) : ''}${capiDel ? capiDelSheet(capiDel) : ''}`;
   app.querySelectorAll(ANIMATED).forEach((n) => { if (seen.has(animKey(n))) n.classList.add('still'); });
+  // 常驻图表搬到新占位上（不在统计页时没有占位，什么都不做）；按报表自身粒度补桶，切粒度后新报表回来前不会错位
+  if (usage) mountUsageChart(document.getElementById('usage-chart-slot'), chartInput(usage, usage.granularity, usageQ.bucket),
+    (k) => { usageQ.bucket = k === usageQ.bucket ? null : k; render(); });
   const logs = document.getElementById('logs');
   if (logs) logs.scrollTop = logs.scrollHeight;
 }
@@ -954,9 +958,10 @@ onEvent<Overview>('activity', (o) => {
   if (q.has('mock') && q.get('tab')) tab = q.get('tab') as Tab;
   if (q.has('mock') && (q.get('feed') === 'raw' || q.get('feed') === 'req')) feedMode = q.get('feed') as 'raw' | 'req';
   if (q.has('mock') && q.has('sheet')) sheetOpen = true;
-  // 统计页预览：ugran=today|month，urange=custom
+  // 统计页预览：ugran=today|month，urange=custom，uroute=线路
   if (q.has('mock') && (q.get('ugran') === 'today' || q.get('ugran') === 'month')) usageQ.gran = q.get('ugran') as 'today' | 'month';
   if (q.has('mock') && q.get('urange') === 'custom') { usageQ.range = 'custom'; usageQ.from = daysAgo(13); usageQ.to = ymd(new Date()); }
+  if (q.has('mock') && q.get('uroute')) usageQ.route = q.get('uroute')!; // 如 codex：只看未知价格线路，图表改画 Tokens
   if (q.has('mock') && q.has('err')) seenErrAt = 0;
   if (q.has('mock') && q.has('capidel')) { const c = status.customApis[0]; if (c) capiDel = { id: c.id, model: c.model }; }
   const cp = q.has('mock') ? q.get('capi') : null; // 预览：progress = 校验中途，fail = 失败态，edit = 编辑态
