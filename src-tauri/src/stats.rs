@@ -1,6 +1,7 @@
 //! 请求统计：定时从代理的请求监控（proxy::monitor）取已完成的请求，给界面用。
 //! - 最近 200 条请求只放内存，「动态」页展示；
-//! - 每天每个模型的调用次数 / 出错次数 / 总耗时写进 stats.json，保留 8 天，用于「近 7 天 N 次」和「今天」统计。
+//! - 按「天 × 线路 × 模型」汇总调用次数 / 出错次数 / 总耗时 / 四项 token，写进 usage.json，保留 400 天；
+//! - 首次启动（没有 usage.json）时一次性导入旧的 stats.json（只读，不改不删）。
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -9,11 +10,12 @@ use std::time::SystemTime;
 use serde::{Deserialize, Serialize};
 
 use crate::proxy::monitor::{CompletedRequest, EndpointKind, MonitorHandle, RequestStatus};
+use crate::proxy::usage_tap::TokenUsage;
 
 const RECENT_MAX: usize = 200;
 const RECENT_SHOWN: usize = 100;
 const SEEN_MAX: usize = 1000;
-const KEEP_DAYS: i64 = 8;
+const KEEP_DAYS: i64 = 400;
 const USE_DAYS: i64 = 7;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -30,20 +32,136 @@ pub struct Activity {
     pub ms: u64,
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
+    /// 缓存读 token（有精确用量时才有）
+    pub cache_read_tokens: Option<u64>,
+    /// 缓存写 token（5 分钟 + 1 小时，有精确用量时才有）
+    pub cache_write_tokens: Option<u64>,
     pub error: Option<String>,
 }
 
+/// 某天某线路某模型的汇总
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
-struct DayModel {
+#[serde(default)]
+pub struct Agg {
+    /// 请求数
+    pub n: u64,
+    /// 出错数
+    pub e: u64,
+    /// 总耗时（毫秒）
+    pub ms: u64,
+    /// 未命中缓存的输入 token
+    #[serde(rename = "in")]
+    pub input: u64,
+    /// 缓存读
+    pub cr: u64,
+    /// 缓存写（5 分钟）
+    pub cw: u64,
+    /// 缓存写（1 小时）
+    pub cw1h: u64,
+    /// 输出
+    pub out: u64,
+}
+
+impl Agg {
+    /// 记一次请求
+    pub fn add_request(&mut self, ok: bool, ms: u64, u: &TokenUsage) {
+        self.n += 1;
+        self.e += u64::from(!ok);
+        self.ms += ms;
+        self.input += u.input;
+        self.cr += u.cache_read;
+        self.cw += u.cache_write_5m;
+        self.cw1h += u.cache_write_1h;
+        self.out += u.output;
+    }
+
+    /// 把另一份汇总加进来
+    pub fn merge(&mut self, o: &Agg) {
+        self.n += o.n;
+        self.e += o.e;
+        self.ms += o.ms;
+        self.input += o.input;
+        self.cr += o.cr;
+        self.cw += o.cw;
+        self.cw1h += o.cw1h;
+        self.out += o.out;
+    }
+
+    /// 四项 token
+    pub fn usage(&self) -> TokenUsage {
+        TokenUsage {
+            input: self.input,
+            cache_read: self.cr,
+            cache_write_5m: self.cw,
+            cache_write_1h: self.cw1h,
+            output: self.out,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(default)]
+struct Persist {
+    version: u32,
+    /// 日期（本地时区，YYYY-MM-DD）→ 线路（claude / codex / api）→ 模型 → 汇总
+    days: BTreeMap<String, BTreeMap<String, BTreeMap<String, Agg>>>,
+}
+
+impl Default for Persist {
+    fn default() -> Self {
+        Self { version: 2, days: BTreeMap::new() }
+    }
+}
+
+/// 旧 stats.json 的格式：日期 → 模型 → 次数 / 错误 / 耗时
+#[derive(Debug, Default, Deserialize)]
+struct LegacyDay {
+    #[serde(default)]
     count: u64,
+    #[serde(default)]
     errors: u64,
+    #[serde(default)]
     ms: u64,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct Persist {
-    /// 日期（本地时区，YYYY-MM-DD）→ 模型 → 统计
-    days: BTreeMap<String, BTreeMap<String, DayModel>>,
+#[derive(Debug, Default, Deserialize)]
+struct LegacyPersist {
+    #[serde(default)]
+    days: BTreeMap<String, BTreeMap<String, LegacyDay>>,
+}
+
+/// 旧数据没记线路，按模型名推断
+fn legacy_route(model: &str) -> &'static str {
+    if model.starts_with("api-") {
+        "api"
+    } else if model.starts_with("claude-") {
+        "claude"
+    } else {
+        "codex"
+    }
+}
+
+fn import_legacy(legacy: &std::path::Path) -> Persist {
+    let mut p = Persist::default();
+    let Some(old) = std::fs::read(legacy).ok().and_then(|b| serde_json::from_slice::<LegacyPersist>(&b).ok()) else {
+        return p;
+    };
+    for (day, models) in old.days {
+        for (model, d) in models {
+            let agg = p
+                .days
+                .entry(day.clone())
+                .or_default()
+                .entry(legacy_route(&model).to_string())
+                .or_default()
+                .entry(model)
+                .or_default();
+            agg.n += d.count;
+            agg.e += d.errors;
+            agg.ms += d.ms;
+        }
+    }
+    p
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -111,18 +229,33 @@ fn to_activity(r: &CompletedRequest) -> Activity {
         ok,
         http_status: r.http_status,
         ms: r.latency.as_millis() as u64,
-        input_tokens: r.input_tokens,
+        input_tokens: r.usage.map(|u| u.input).or(r.input_tokens),
         output_tokens: r.output_tokens,
+        cache_read_tokens: r.usage.map(|u| u.cache_read),
+        cache_write_tokens: r.usage.map(|u| u.cache_write_5m + u.cache_write_1h),
         error: if ok { None } else { r.error.clone() },
     }
 }
 
 impl Stats {
-    pub fn load(path: PathBuf) -> Self {
-        let persist = std::fs::read(&path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default();
+    /// 读 usage.json；它不存在时一次性导入旧 stats.json；损坏时改名 .bad 后从空开始（不导入旧文件）。
+    pub fn load(path: PathBuf, legacy: PathBuf) -> Self {
+        let mut dirty = false;
+        let persist = match std::fs::read(&path) {
+            Ok(b) => match serde_json::from_slice::<Persist>(&b) {
+                Ok(p) => p,
+                Err(_) => {
+                    let _ = std::fs::rename(&path, path.with_extension("json.bad"));
+                    dirty = true;
+                    Persist::default()
+                }
+            },
+            Err(_) => {
+                let p = import_legacy(&legacy);
+                dirty = !p.days.is_empty();
+                p
+            }
+        };
         Self {
             path,
             inner: Mutex::new(Inner {
@@ -130,13 +263,17 @@ impl Stats {
                 seen_order: VecDeque::new(),
                 recent: VecDeque::new(),
                 persist,
-                dirty: false,
+                dirty,
             }),
         }
     }
 
     /// 收进监控里新完成的 /v1/messages 请求；有新请求时返回 true。
     pub fn ingest(&self, monitor: &MonitorHandle) -> bool {
+        self.ingest_at(monitor, &day_of(SystemTime::now()))
+    }
+
+    fn ingest_at(&self, monitor: &MonitorHandle, today: &str) -> bool {
         let mut done: Vec<CompletedRequest> = monitor
             .snapshot()
             .recent
@@ -162,16 +299,22 @@ impl Stats {
             }
             let a = to_activity(r);
             let day = day_of(r.finished_at);
-            let e = g.persist.days.entry(day).or_default().entry(a.model.clone()).or_default();
-            e.count += 1;
-            e.errors += u64::from(!a.ok);
-            e.ms += a.ms;
+            let usage = r.usage.unwrap_or_default();
+            g.persist
+                .days
+                .entry(day)
+                .or_default()
+                .entry(a.route.to_string())
+                .or_default()
+                .entry(a.model.clone())
+                .or_default()
+                .add_request(a.ok, a.ms, &usage);
             g.recent.push_front(a);
             g.recent.truncate(RECENT_MAX);
             changed = true;
         }
         if changed {
-            let cutoff = days_before(&day_of(SystemTime::now()), KEEP_DAYS);
+            let cutoff = days_before(today, KEEP_DAYS);
             g.persist.days.retain(|d, _| d.as_str() > cutoff.as_str());
             g.dirty = true;
         }
@@ -201,9 +344,9 @@ impl Stats {
         let mut t = Today::default();
         let mut ms = 0;
         if let Some(day) = g.persist.days.get(today) {
-            for m in day.values() {
-                t.count += m.count;
-                t.errors += m.errors;
+            for m in day.values().flat_map(|r| r.values()) {
+                t.count += m.n;
+                t.errors += m.e;
                 ms += m.ms;
             }
         }
@@ -214,8 +357,8 @@ impl Stats {
             if d.as_str() > today {
                 continue;
             }
-            for (m, s) in models {
-                *model_use.entry(m.clone()).or_insert(0) += s.count;
+            for (m, s) in models.values().flat_map(|r| r.iter()) {
+                *model_use.entry(m.clone()).or_insert(0) += s.n;
             }
         }
         Overview { recent: g.recent.iter().take(RECENT_SHOWN).cloned().collect(), today: t, model_use }
@@ -251,7 +394,7 @@ mod tests {
             ("b", "anthropic", "claude-opus-5-5", Ok(200)),
             ("c", "codex", "gpt-6.2-sol", Err(429)),
         ]);
-        let s = Stats::load(tmp_path("stats.json"));
+        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
         assert!(s.ingest(&m));
         assert!(!s.ingest(&m), "同一批请求不能重复计数");
         let o = s.overview();
@@ -274,7 +417,7 @@ mod tests {
         m.provider_selected("a", "codex", "gpt-6.1-sol", None);
         m.model_resolved("a", "gpt-6.1-sol-fast");
         m.request_completed("a", 200, Some(1), Some(1));
-        let s = Stats::load(tmp_path("stats.json"));
+        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
         s.ingest(&m);
         let o = s.overview();
         let raw = m.snapshot().recent[0].model.clone().unwrap();
@@ -290,40 +433,124 @@ mod tests {
         m.request_completed("x", 200, None, None);
         m.request_started("y", None, None, EndpointKind::Messages);
         m.request_failed("y", Some(400), "Unknown model");
-        let s = Stats::load(tmp_path("stats.json"));
+        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
         assert!(!s.ingest(&m));
         assert_eq!(s.overview().today.count, 0);
     }
 
     #[test]
     fn persists_daily_counts_and_prunes_old_days() {
-        let path = tmp_path("stats.json");
-        let s = Stats::load(path.clone());
+        let path = tmp_path("usage.json");
+        let s = Stats::load(path.clone(), tmp_path("stats.json"));
         s.ingest(&monitor_with(&[("a", "codex", "gpt-6.2-sol", Ok(200))]));
         {
             let mut g = s.inner.lock().unwrap();
-            g.persist.days.entry("2000-01-01".into()).or_default().insert("old".into(), DayModel { count: 5, errors: 0, ms: 1 });
+            g.persist.days.entry("2000-01-01".into()).or_default().entry("codex".into()).or_default().insert("old".into(), Agg { n: 5, e: 0, ms: 1, ..Default::default() });
         }
         s.ingest(&monitor_with(&[("b", "codex", "gpt-6.2-sol", Ok(200))]));
         s.save();
-        let again = Stats::load(path);
+        let again = Stats::load(path, tmp_path("stats.json"));
         let o = again.overview();
         assert_eq!(o.model_use.get("gpt-6.2-sol"), Some(&2), "重启后从文件恢复");
         assert!(o.recent.is_empty(), "最近请求只在内存里");
-        assert!(!again.inner.lock().unwrap().persist.days.contains_key("2000-01-01"), "超过 8 天的删掉");
+        assert!(!again.inner.lock().unwrap().persist.days.contains_key("2000-01-01"), "超过 400 天的删掉");
     }
 
     #[test]
     fn model_use_covers_last_seven_days_only() {
-        let s = Stats::load(tmp_path("stats.json"));
+        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
         {
             let mut g = s.inner.lock().unwrap();
             for (d, n) in [("2026-11-18", 1), ("2026-11-12", 2), ("2026-11-11", 4)] {
-                g.persist.days.entry(d.into()).or_default().insert("m".into(), DayModel { count: n, errors: 0, ms: 0 });
+                g.persist.days.entry(d.into()).or_default().entry("codex".into()).or_default().insert("m".into(), Agg { n, ..Default::default() });
             }
         }
         let o = s.overview_at("2026-11-18");
         assert_eq!(o.model_use.get("m"), Some(&3), "11-12 到 11-18 共 7 天");
         assert_eq!(o.today, Today { count: 1, errors: 0, avg_ms: 0 });
+    }
+
+    fn route_agg(s: &Stats, day: &str, route: &str, model: &str) -> Agg {
+        let g = s.inner.lock().unwrap();
+        g.persist.days.get(day).and_then(|r| r.get(route)).and_then(|m| m.get(model)).cloned().unwrap_or_default()
+    }
+
+    #[test]
+    fn records_tokens_per_route_and_model() {
+        let m = monitor_with(&[
+            ("a", "anthropic", "claude-opus-5-5", Ok(200)),
+            ("b", "anthropic", "claude-opus-5-5", Ok(200)),
+            ("c", "codex", "gpt-6.1-sol", Ok(200)),
+        ]);
+        for id in ["a", "b"] {
+            m.usage_final(id, TokenUsage { cache_read: 100, ..Default::default() });
+        }
+        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        s.ingest(&m);
+        let today = day_of(SystemTime::now());
+        let c = route_agg(&s, &today, "claude", "claude-opus-5-5");
+        assert_eq!((c.cr, c.n), (200, 2));
+        assert_eq!(route_agg(&s, &today, "codex", "gpt-6.1-sol").n, 1);
+        let o = s.overview();
+        let a = o.recent.iter().find(|a| a.id == "a").unwrap();
+        assert_eq!(a.cache_read_tokens, Some(100));
+        assert_eq!(a.cache_write_tokens, Some(0));
+        let cc = o.recent.iter().find(|a| a.id == "c").unwrap();
+        assert_eq!(cc.cache_read_tokens, None);
+    }
+
+    #[test]
+    fn imports_legacy_stats_json_once() {
+        let dir = tempfile::tempdir().unwrap().keep();
+        let today = day_of(SystemTime::now());
+        let old = days_before(&today, 6);
+        let legacy = format!(
+            r#"{{"days":{{"{today}":{{"gpt-6.2-sol":{{"count":3,"errors":1,"ms":30}},"api-claude-opus-5-5":{{"count":2,"errors":0,"ms":20}}}},"{old}":{{"claude-opus-5-5":{{"count":4,"errors":0,"ms":40}}}}}}}}"#
+        );
+        let legacy_path = dir.join("stats.json");
+        std::fs::write(&legacy_path, &legacy).unwrap();
+        let usage_path = dir.join("usage.json");
+        let s = Stats::load(usage_path.clone(), legacy_path.clone());
+        let o = s.overview();
+        assert_eq!((o.today.count, o.today.errors), (5, 1));
+        assert_eq!(o.model_use.get("claude-opus-5-5"), Some(&4));
+        assert_eq!(route_agg(&s, &today, "codex", "gpt-6.2-sol").n, 3);
+        assert_eq!(route_agg(&s, &today, "api", "api-claude-opus-5-5").n, 2);
+        assert_eq!(route_agg(&s, &old, "claude", "claude-opus-5-5").n, 4);
+        s.save();
+        assert!(usage_path.exists());
+        assert_eq!(std::fs::read(&legacy_path).unwrap(), legacy.as_bytes(), "旧文件不能被改动");
+        let again = Stats::load(usage_path, legacy_path);
+        assert_eq!(again.overview().today.count, 5, "不重复导入");
+    }
+
+    #[test]
+    fn prunes_days_older_than_400() {
+        let s = Stats::load(tmp_path("usage.json"), tmp_path("stats.json"));
+        let today = day_of(SystemTime::now());
+        let (d400, d399) = (days_before(&today, 400), days_before(&today, 399));
+        {
+            let mut g = s.inner.lock().unwrap();
+            for d in [&d400, &d399] {
+                g.persist.days.entry(d.clone()).or_default().entry("codex".into()).or_default().insert("m".into(), Agg { n: 1, ..Default::default() });
+            }
+        }
+        s.ingest(&monitor_with(&[("a", "codex", "gpt-6.2-sol", Ok(200))]));
+        let g = s.inner.lock().unwrap();
+        assert!(!g.persist.days.contains_key(&d400));
+        assert!(g.persist.days.contains_key(&d399));
+    }
+
+    #[test]
+    fn corrupt_usage_json_falls_back_to_empty() {
+        let dir = tempfile::tempdir().unwrap().keep();
+        let today = day_of(SystemTime::now());
+        let legacy_path = dir.join("stats.json");
+        std::fs::write(&legacy_path, format!(r#"{{"days":{{"{today}":{{"m":{{"count":3,"errors":0,"ms":1}}}}}}}}"#)).unwrap();
+        let usage_path = dir.join("usage.json");
+        std::fs::write(&usage_path, "not json").unwrap();
+        let s = Stats::load(usage_path.clone(), legacy_path);
+        assert_eq!(s.overview().today.count, 0, "损坏时不导入旧文件");
+        assert_eq!(std::fs::read(dir.join("usage.json.bad")).unwrap(), b"not json");
     }
 }
