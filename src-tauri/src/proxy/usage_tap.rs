@@ -50,6 +50,8 @@ pub struct UsageTap {
     overflow: bool,
     usage: TokenUsage,
     seen: bool,
+    /// 是否见过 cache_creation 的 TTL 细分
+    split_seen: bool,
 }
 
 impl UsageTap {
@@ -64,6 +66,7 @@ impl UsageTap {
             overflow: false,
             usage: TokenUsage::default(),
             seen: false,
+            split_seen: false,
         }
     }
 
@@ -172,11 +175,18 @@ impl UsageTap {
         if t5.is_some() || t1.is_some() {
             self.usage.cache_write_5m = t5.unwrap_or(0);
             self.usage.cache_write_1h = t1.unwrap_or(0);
+            self.split_seen = true;
             self.seen = true;
         } else if let Some(n) = num("cache_creation_input_tokens") {
-            // 无 TTL 细分：全部记为 5 分钟档
-            self.usage.cache_write_5m = n;
-            self.usage.cache_write_1h = 0;
+            if self.split_seen {
+                // 已见过细分：只带汇总值的后到事件不能抹掉 1h 档。
+                // 汇总 == 5m+1h 则保持不变；不同则 1h 保持，差额调整到 5m。
+                self.usage.cache_write_5m = n.saturating_sub(self.usage.cache_write_1h);
+            } else {
+                // 从未见过细分：全部记为 5 分钟档
+                self.usage.cache_write_5m = n;
+                self.usage.cache_write_1h = 0;
+            }
             self.seen = true;
         }
     }
@@ -234,14 +244,9 @@ mod tests {
         t.feed(&bytes[pos..]);
         let mut whole = sse_tap();
         whole.feed(bytes);
-        assert_eq!(t.finish(), whole.finish());
-        assert_eq!(whole_output(), 55);
-    }
-
-    fn whole_output() -> u64 {
-        let mut t = sse_tap();
-        t.feed(SSE.as_bytes());
-        t.finish().unwrap().output
+        let whole = whole.finish();
+        assert_eq!(whole.unwrap().output, 55);
+        assert_eq!(t.finish(), whole);
     }
 
     #[test]
@@ -286,5 +291,61 @@ mod tests {
         let mut s = sse_tap();
         s.feed(b"event: ping\ndata: {\"type\":\"ping\"}\n\n");
         assert_eq!(s.finish(), None);
+    }
+
+    #[test]
+    fn tap_keeps_ttl_split_when_delta_has_only_total() {
+        let s = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":1,\"cache_creation_input_tokens\":140,\"cache_creation\":{\"ephemeral_5m_input_tokens\":100,\"ephemeral_1h_input_tokens\":40}}}}\n\n",
+            "data: {\"type\":\"message_delta\",\"usage\":{\"cache_creation_input_tokens\":140,\"output_tokens\":5}}\n\n",
+        );
+        let mut t = sse_tap();
+        t.feed(s.as_bytes());
+        let u = t.finish().unwrap();
+        assert_eq!((u.cache_write_5m, u.cache_write_1h, u.output), (100, 40, 5));
+    }
+
+    #[test]
+    fn tap_adjusts_5m_by_difference_when_total_differs() {
+        let s = concat!(
+            "data: {\"message\":{\"usage\":{\"cache_creation\":{\"ephemeral_5m_input_tokens\":100,\"ephemeral_1h_input_tokens\":40}}}}\n",
+            "data: {\"usage\":{\"cache_creation_input_tokens\":200}}\n",
+        );
+        let mut t = sse_tap();
+        t.feed(s.as_bytes());
+        let u = t.finish().unwrap();
+        assert_eq!((u.cache_write_5m, u.cache_write_1h), (160, 40));
+    }
+
+    #[test]
+    fn tap_drops_overlong_line_and_recovers() {
+        let mut t = sse_tap();
+        t.feed(b"data: {\"usage\":\"");
+        let junk = vec![b'x'; 600 * 1024];
+        t.feed(&junk);
+        t.feed(&junk);
+        t.feed(b"\n");
+        t.feed(b"data: {\"usage\":{\"input_tokens\":4}}\n");
+        assert_eq!(t.finish().unwrap().input, 4);
+    }
+
+    #[test]
+    fn tap_json_over_limit_gives_none() {
+        let mut t = UsageTap::new(Some("application/json"));
+        let junk = vec![b' '; 1024 * 1024];
+        t.feed(&junk);
+        t.feed(&junk);
+        t.feed(&junk);
+        t.feed(b"{\"usage\":{\"input_tokens\":1}}");
+        assert_eq!(t.finish(), None);
+    }
+
+    #[test]
+    fn tap_handles_crlf_and_last_line_without_newline() {
+        let mut t = sse_tap();
+        t.feed(b"event: message_start\r\ndata: {\"usage\":{\"input_tokens\":8}}\r\n\r\n");
+        t.feed(b"data: {\"usage\":{\"output_tokens\":9}}");
+        let u = t.finish().unwrap();
+        assert_eq!((u.input, u.output), (8, 9));
     }
 }

@@ -58,12 +58,12 @@ pub fn price_for(route: &str, model: &str) -> Option<&'static Price> {
 }
 
 /// 等价 API 价（美元）。
-pub fn cost_usd(u: &TokenUsage, p: &Price) -> f64 {
-    (u.input as f64 * p.input
-        + u.cache_read as f64 * p.cache_read
-        + u.cache_write_5m as f64 * p.cache_write_5m
-        + u.cache_write_1h as f64 * p.cache_write_1h
-        + u.output as f64 * p.output)
+pub fn cost_usd(u: &TokenUsage, price: &Price) -> f64 {
+    (u.input as f64 * price.input
+        + u.cache_read as f64 * price.cache_read
+        + u.cache_write_5m as f64 * price.cache_write_5m
+        + u.cache_write_1h as f64 * price.cache_write_1h
+        + u.output as f64 * price.output)
         / 1_000_000.0
 }
 
