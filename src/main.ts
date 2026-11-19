@@ -45,6 +45,8 @@ const usageQ: { gran: 'today' | 'day' | 'month'; range: 7 | 30 | 90 | 'custom'; 
 let usageSeq = 0;
 let usageAt = 0;
 let usageTimer = 0;
+let usageDateTimer = 0; // 自定义日期框 change 防抖
+const USAGE_DATE_DEBOUNCE = 700;
 const USAGE_MIN_GAP = 3000; // activity 事件触发的刷新至少间隔 3 秒
 let query = '';
 const folds = new Map<string, boolean>(); // 模型分组：用户手动展开 / 收起过的
@@ -346,8 +348,11 @@ function usageArgs() {
   return { from, to, granularity: q.gran, route: q.route || null, model: q.model || null };
 }
 
-/** 拉报表：序号自增，过期响应丢弃；完成后 shouldRerender() 为真才重绘（日期框有焦点时不打断输入） */
-async function loadUsage(): Promise<void> {
+/**
+ * 拉报表：序号自增，过期响应丢弃；完成后 shouldRerender() 为真才重绘（日期框有焦点时不打断输入）。
+ * dateEl：由日期框防抖提交触发时传入；返回时焦点仍在该框且值没再改过（用户停顿中），也重绘以显示结果。
+ */
+async function loadUsage(dateEl?: HTMLInputElement): Promise<void> {
   clearTimeout(usageTimer);
   usageTimer = 0;
   const seq = ++usageSeq;
@@ -361,17 +366,21 @@ async function loadUsage(): Promise<void> {
     if (seq !== usageSeq) return;
     usageErr = usageErrText(e);
   }
-  if (statsVisible() && shouldRerender()) render();
+  if (!statsVisible()) return;
+  const idle = !!dateEl && document.activeElement === dateEl && dateEl.value === usageQ[dateEl.id === 'u-from' ? 'from' : 'to'];
+  if (shouldRerender() || idle) render();
 }
 
-/** 提交自定义日期：只在日期框失焦 / 回车时调用；不完整、年份 < 2000 或没变化都不查 */
+/** 提交自定义日期：失焦 / 回车立即调用，change 停顿 USAGE_DATE_DEBOUNCE 后调用；不完整、年份 < 2000 或没变化都不查 */
 function commitUsageDate(el: HTMLInputElement) {
+  clearTimeout(usageDateTimer);
+  usageDateTimer = 0;
   if (!okDate(el.value)) return;
   const key = el.id === 'u-from' ? 'from' : 'to';
   if (usageQ[key] === el.value) return;
   usageQ[key] = el.value;
   usageQ.bucket = null;
-  void loadUsage();
+  void loadUsage(el);
 }
 
 /** activity 事件很频繁：统计页可见时节流刷新，两次请求至少间隔 USAGE_MIN_GAP */
@@ -867,8 +876,14 @@ app.addEventListener('change', (e) => {
     usageQ.bucket = null;
     return void loadUsage();
   }
-  // 自定义日期框：逐位输入时每段都会触发 change，这里不提交，等失焦 / 回车（见 focusout、keydown）
-  if (el.id === 'u-from' || el.id === 'u-to') return;
+  // 自定义日期框：逐位输入时每段都会触发 change，这里只做防抖——值完整且年份 ≥ 2000 时停顿 700ms 再提交，
+  // 期间再改就重新计时，中间值（0002、0020…）直接取消计时；失焦 / 回车仍立即提交（见 focusout、keydown）。
+  // 日历弹窗选完日期焦点留在框里不会失焦，靠这里自动查询。
+  if (el.id === 'u-from' || el.id === 'u-to') {
+    clearTimeout(usageDateTimer);
+    usageDateTimer = okDate(el.value) ? window.setTimeout(() => commitUsageDate(el), USAGE_DATE_DEBOUNCE) : 0;
+    return;
+  }
   const key = el.dataset?.save as keyof AppConfig | undefined;
   if (!key) return;
   const v = el.value.trim();
