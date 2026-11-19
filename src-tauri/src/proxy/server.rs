@@ -28,7 +28,7 @@ use crate::proxy::{
     request_identity::{CLAUDE_AGENT_HEADER, CLAUDE_PARENT_AGENT_HEADER, ConversationIdentity},
     session::{self, SessionState},
     traffic::{TrafficCaptureOptions, create_traffic_capture},
-    usage_tap::{TokenUsage, UsageTap},
+    usage_tap::UsageTap,
 };
 use axum::{
     Json, Router,
@@ -1917,35 +1917,30 @@ fn monitor_response_body(response: Response, guard: RequestMonitorGuard) -> Resp
     stamp_request_id(&mut parts.headers, &guard.req_id);
     // 按响应 content-type 增量解析 usage（SSE / JSON），结束时上报给监控。
     // 只对 Messages 端点启用；其它端点（Responses/Images 等）不解析，也不缓冲。
-    let tap = guard.track_usage.then(|| {
-        UsageTap::new(
-            parts
-                .headers
-                .get(http::header::CONTENT_TYPE)
-                .and_then(|value| value.to_str().ok()),
-        )
-    });
+    // tap 放在 guard 里：客户端中途断开（Esc）时 body 随 guard 一起 drop，
+    // guard 的 Drop 仍能把已解析到的 usage 记下再发终态。
+    let mut guard = guard;
+    guard.start_usage_tap(
+        parts
+            .headers
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
     let stream = futures_util::stream::unfold(
-        (body, guard, outcome, tap),
-        move |(mut body, mut guard, outcome, mut tap)| async move {
+        (body, guard, outcome),
+        move |(mut body, mut guard, outcome)| async move {
             match body.frame().await {
                 Some(Ok(frame)) => {
-                    if let (Some(tap), Some(data)) = (tap.as_mut(), frame.data_ref()) {
-                        tap.feed(data);
+                    if let Some(data) = frame.data_ref() {
+                        guard.feed_usage(data);
                     }
-                    Some((Ok(frame), (body, guard, outcome, tap)))
+                    Some((Ok(frame), (body, guard, outcome)))
                 }
                 Some(Err(err)) => {
-                    if let Some(usage) = tap.take().and_then(UsageTap::finish) {
-                        guard.usage(usage);
-                    }
                     guard.failed(status, err.to_string());
-                    Some((Err(err), (body, guard, outcome, tap)))
+                    Some((Err(err), (body, guard, outcome)))
                 }
                 None => {
-                    if let Some(usage) = tap.take().and_then(UsageTap::finish) {
-                        guard.usage(usage);
-                    }
                     if let Some(message) = outcome.as_ref().and_then(NativeResponseOutcome::failure)
                     {
                         guard.failed(status, message);
@@ -2159,6 +2154,8 @@ struct RequestMonitorGuard {
     req_id: String,
     /// 是否解析响应 usage；仅 Messages 端点开启，默认关闭以免漏改时误统计。
     track_usage: bool,
+    /// 响应体的 usage 解析器；终态（完成 / 失败 / 中途丢弃）前先 finish 并上报
+    usage_tap: Option<UsageTap>,
 }
 
 impl RequestMonitorGuard {
@@ -2167,6 +2164,7 @@ impl RequestMonitorGuard {
             monitor,
             req_id,
             track_usage: false,
+            usage_tap: None,
         }
     }
 
@@ -2175,19 +2173,38 @@ impl RequestMonitorGuard {
         self
     }
 
-    fn usage(&mut self, usage: TokenUsage) {
+    /// 开启了 usage 跟踪时按 content-type 建解析器
+    fn start_usage_tap(&mut self, content_type: Option<&str>) {
+        if self.track_usage {
+            self.usage_tap = Some(UsageTap::new(content_type));
+        }
+    }
+
+    fn feed_usage(&mut self, data: &[u8]) {
+        if let Some(tap) = self.usage_tap.as_mut() {
+            tap.feed(data);
+        }
+    }
+
+    /// 结束解析并把已读到的 usage 上报（只报一次）；必须在发终态事件之前调用
+    fn flush_usage(&mut self) {
+        let Some(usage) = self.usage_tap.take().and_then(UsageTap::finish) else {
+            return;
+        };
         if let Some(monitor) = self.monitor.as_ref() {
             monitor.usage_final(&self.req_id, usage);
         }
     }
 
     fn completed(&mut self, status: StatusCode) {
+        self.flush_usage();
         if let Some(monitor) = self.monitor.take() {
             monitor.request_completed(&self.req_id, status.as_u16(), None, None);
         }
     }
 
     fn failed(&mut self, status: StatusCode, error: String) {
+        self.flush_usage();
         if let Some(monitor) = self.monitor.take() {
             monitor.request_failed(&self.req_id, Some(status.as_u16()), error);
         }
@@ -2196,6 +2213,8 @@ impl RequestMonitorGuard {
 
 impl Drop for RequestMonitorGuard {
     fn drop(&mut self) {
+        // 客户端中途取消：出错请求解析到多少记多少
+        self.flush_usage();
         if let Some(monitor) = self.monitor.as_ref() {
             monitor.request_abandoned(&self.req_id, "Request future ended before completion");
         }
@@ -2582,7 +2601,7 @@ mod usage_tap_tests {
     }
 
     #[tokio::test]
-    async fn dropped_body_is_abandoned_without_usage() {
+    async fn dropped_body_is_abandoned_with_partial_usage() {
         let m = MonitorHandle::new(10);
         m.request_started("u4", None, None, EndpointKind::Messages);
         let guard = RequestMonitorGuard::new(Some(m.clone()), "u4".to_string())
@@ -2611,6 +2630,8 @@ mod usage_tap_tests {
                 .unwrap_or_default()
                 .contains("ended before completion")
         );
-        assert!(state.recent[0].usage.is_none());
+        // 已读到的 message_start usage 要记下
+        let usage = state.recent[0].usage.expect("中途丢弃也要记录已解析的 usage");
+        assert_eq!(usage.input, 1);
     }
 }
