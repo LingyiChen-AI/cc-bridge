@@ -451,7 +451,8 @@ function statsView(_s: Status): string {
   const legend = present.length ? `<div class="ulegend">${present.map((x) => `<span><i class="rdot r-${x}"></i>${esc(routeName(x))}</span>`).join('')}</div>` : '';
 
   // 图表区（Task 6 在占位上挂 ECharts）；「今天」只有一个桶，不画图
-  const priced = !!r?.buckets.some((b) => b.models.some((m) => m.priced));
+  // 与 usage-chart.ts chartInput 的单位判断一致：范围内总金额为 0 时图表画 Tokens
+  const priced = !!r && r.totals.costUsd !== 0;
   const chart = today ? '' : `<section class="card ucard-chart"><div class="sec-h"><b>${esc(priced ? `${t('usageCost')} · ${t('usageApiPrice')}` : t('usageTokensChart'))}</b></div><div id="usage-chart-slot" class="uchart"></div></section>`;
 
   // 明细表：选中桶 → 该桶各模型；未选 → 整个范围合并
