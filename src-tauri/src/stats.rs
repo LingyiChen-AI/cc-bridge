@@ -701,6 +701,15 @@ mod tests {
         m
     }
 
+    /// Windows 没有 /usr/share/zoneinfo，必须靠 tzdb-bundle-platform 打包的时区库；
+    /// 否则 TimeZone::system() 回退 Etc/Unknown（≈UTC），统计日期在北京 00:00–08:00 会错一天
+    #[cfg(windows)]
+    #[test]
+    fn windows_system_time_zone_resolves() {
+        let tz = jiff::tz::TimeZone::try_system();
+        assert!(tz.is_ok(), "系统时区解析失败：{:?}", tz.err());
+        assert_ne!(tz.unwrap().iana_name(), Some("Etc/Unknown"));
+    }
 
     #[test]
     fn ingests_once_and_counts_per_model() {
