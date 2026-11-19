@@ -111,4 +111,7 @@ export const ru: Dict = {
   usageColCost: "Стоим.",
   usageEmpty: "За этот период запросов нет",
   routeGpt: "GPT (подписка Codex)",
+  usageBadDate: "Неверная дата: {detail}",
+  usageFrom: "Дата начала",
+  usageTo: "Дата окончания",
 };

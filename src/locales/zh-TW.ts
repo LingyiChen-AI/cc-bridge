@@ -111,4 +111,7 @@ export const zhTW: Dict = {
   usageColCost: "花費",
   usageEmpty: "這段時間沒有請求",
   routeGpt: "GPT（Codex 訂閱）",
+  usageBadDate: "日期格式不對：{detail}",
+  usageFrom: "開始日期",
+  usageTo: "結束日期",
 };

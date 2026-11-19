@@ -111,4 +111,7 @@ export const ja: Dict = {
   usageColCost: "費用",
   usageEmpty: "この期間のリクエストはありません",
   routeGpt: "GPT（Codex プラン）",
+  usageBadDate: "日付の形式が正しくありません：{detail}",
+  usageFrom: "開始日",
+  usageTo: "終了日",
 };

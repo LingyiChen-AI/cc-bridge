@@ -111,4 +111,7 @@ export const es: Dict = {
   usageColCost: "Coste",
   usageEmpty: "No hay solicitudes en este periodo",
   routeGpt: "GPT (plan Codex)",
+  usageBadDate: "Fecha no válida: {detail}",
+  usageFrom: "Fecha de inicio",
+  usageTo: "Fecha de fin",
 };

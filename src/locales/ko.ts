@@ -111,4 +111,7 @@ export const ko: Dict = {
   usageColCost: "비용",
   usageEmpty: "이 기간에 요청이 없습니다",
   routeGpt: "GPT (Codex 구독)",
+  usageBadDate: "날짜 형식이 잘못되었습니다: {detail}",
+  usageFrom: "시작일",
+  usageTo: "종료일",
 };

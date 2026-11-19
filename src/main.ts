@@ -311,10 +311,22 @@ const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n
 const fmtUsd = (v: number) => (v > 0 && v < 0.01 ? '<$0.01' : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
 /** Token 数：K / M / B 缩写，保留一位小数（整数去掉 .0） */
 function fmtTok(n: number) {
-  const units: [number, string][] = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
-  for (const [d, u] of units) if (Math.abs(n) >= d) { const v = n / d; return `${v >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, '')}${u}`; }
-  return String(n);
+  const units: [number, string][] = [[1, ''], [1e3, 'K'], [1e6, 'M'], [1e9, 'B']];
+  const show = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, ''));
+  let i = units.length - 1;
+  while (i > 0 && Math.abs(n) < units[i][0]) i--;
+  // 四舍五入后到了 1000（如 999,950 → 1000K）就进到下一档
+  while (i < units.length - 1 && Math.abs(Number(show(n / units[i][0]))) >= 1000) i++;
+  return i === 0 ? String(n) : `${show(n / units[i][0])}${units[i][1]}`;
 }
+/** 自定义日期：完整的 YYYY-MM-DD 且年份 ≥ 2000（逐位输入年份时的 0002、0020 等中间值不算） */
+const okDate = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && Number(v.slice(0, 4)) >= 2000;
+/** 后端错误 → 界面文案：日期格式错误本地化，其余原样 */
+const usageErrText = (e: unknown) => {
+  const raw = String(e).replace(/^Error:\s*/, '');
+  const m = /^日期格式错误[：:]\s*(.*)$/.exec(raw);
+  return m ? t('usageBadDate', { detail: m[1] }) : raw;
+};
 const fmtNum = (v: number) => (v >= 10 || Number.isInteger(v) ? Math.round(v).toLocaleString() : v.toFixed(1));
 const tokIn = (x: UsageTotals) => x.input + x.cacheRead + x.cacheWrite;
 const tokAll = (x: UsageTotals) => tokIn(x) + x.output;
@@ -334,8 +346,8 @@ function usageArgs() {
   return { from, to, granularity: q.gran, route: q.route || null, model: q.model || null };
 }
 
-/** 拉报表：序号自增，过期响应丢弃；user=true（用户改筛选）时自定义日期框有焦点也重绘 */
-async function loadUsage(user = false): Promise<void> {
+/** 拉报表：序号自增，过期响应丢弃；完成后 shouldRerender() 为真才重绘（日期框有焦点时不打断输入） */
+async function loadUsage(): Promise<void> {
   clearTimeout(usageTimer);
   usageTimer = 0;
   const seq = ++usageSeq;
@@ -347,11 +359,19 @@ async function loadUsage(user = false): Promise<void> {
     usageErr = null;
   } catch (e) {
     if (seq !== usageSeq) return;
-    usageErr = String(e).replace(/^Error:\s*/, '');
+    usageErr = usageErrText(e);
   }
-  if (!statsVisible()) return;
-  const id = (document.activeElement as HTMLElement | null)?.id;
-  if (shouldRerender() || (user && (id === 'u-from' || id === 'u-to'))) render();
+  if (statsVisible() && shouldRerender()) render();
+}
+
+/** 提交自定义日期：只在日期框失焦 / 回车时调用；不完整、年份 < 2000 或没变化都不查 */
+function commitUsageDate(el: HTMLInputElement) {
+  if (!okDate(el.value)) return;
+  const key = el.id === 'u-from' ? 'from' : 'to';
+  if (usageQ[key] === el.value) return;
+  usageQ[key] = el.value;
+  usageQ.bucket = null;
+  void loadUsage();
 }
 
 /** activity 事件很频繁：统计页可见时节流刷新，两次请求至少间隔 USAGE_MIN_GAP */
@@ -390,7 +410,7 @@ function statsView(_s: Status): string {
   const a = usageArgs();
   const max = ymd(new Date());
   const custom = !today && q.range === 'custom'
-    ? `<div class="urow udates"><input type="date" class="v" id="u-from" value="${esc(a.from)}" max="${max}" aria-label="from"><span>–</span><input type="date" class="v" id="u-to" value="${esc(a.to)}" max="${max}" aria-label="to"></div>` : '';
+    ? `<div class="urow udates"><input type="date" class="v" id="u-from" value="${esc(a.from)}" max="${max}" aria-label="${esc(t('usageFrom'))}"><span>–</span><input type="date" class="v" id="u-to" value="${esc(a.to)}" max="${max}" aria-label="${esc(t('usageTo'))}"></div>` : '';
   // 下拉选项来自报表（不受过滤影响）；当前选中的值不在列表里也保留，避免选项消失
   const withCur = (list: string[], cur: string) => (cur && !list.includes(cur) ? [...list, cur] : list);
   const routeOpts = [{ value: '', label: t('usageAllRoutes') }, ...withCur(r?.routes ?? [], q.route).map((x) => ({ value: x, label: routeName(x) }))];
@@ -736,14 +756,14 @@ async function act(name: string, el: HTMLElement): Promise<void> {
         if (g === usageQ.gran) break;
         usageQ.gran = g;
         if (g === 'month' && typeof usageQ.range === 'number' && usageQ.range < 90) usageQ.range = 90; // 按月看 7 / 30 天意义不大
-        usageQ.bucket = null; render(); await loadUsage(true);
+        usageQ.bucket = null; render(); await loadUsage();
         break;
       }
       case 'usage-range': {
         const v = el.dataset.v === 'custom' ? 'custom' : (Number(el.dataset.v) as 7 | 30 | 90);
         if (v === usageQ.range) break;
         if (v === 'custom') { const a = usageArgs(); usageQ.from = a.from; usageQ.to = a.to; } // 自定义从当前范围起步
-        usageQ.range = v; usageQ.bucket = null; render(); await loadUsage(true);
+        usageQ.range = v; usageQ.bucket = null; render(); await loadUsage();
         break;
       }
       case 'usage-bucket': { const k = el.dataset.key || null; usageQ.bucket = k === usageQ.bucket ? null : k; render(); break; }
@@ -845,14 +865,10 @@ app.addEventListener('change', (e) => {
     const v = selectValue(el.id);
     if (el.id === 'u-route') usageQ.route = v; else usageQ.model = v;
     usageQ.bucket = null;
-    return void loadUsage(true);
+    return void loadUsage();
   }
-  if (el.id === 'u-from' || el.id === 'u-to') {
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // 没填完整不查
-    if (el.id === 'u-from') usageQ.from = el.value; else usageQ.to = el.value;
-    usageQ.bucket = null;
-    return void loadUsage(true);
-  }
+  // 自定义日期框：逐位输入时每段都会触发 change，这里不提交，等失焦 / 回车（见 focusout、keydown）
+  if (el.id === 'u-from' || el.id === 'u-to') return;
   const key = el.dataset?.save as keyof AppConfig | undefined;
   if (!key) return;
   const v = el.value.trim();
@@ -866,7 +882,11 @@ app.addEventListener('change', (e) => {
 });
 app.addEventListener('keydown', (e) => {
   const el = e.target as HTMLInputElement;
-  if (e.key === 'Enter' && el.dataset?.save) el.blur();
+  if (e.key === 'Enter' && (el.dataset?.save || el.id === 'u-from' || el.id === 'u-to')) el.blur();
+});
+app.addEventListener('focusout', (e) => {
+  const el = e.target as HTMLInputElement;
+  if (el.id === 'u-from' || el.id === 'u-to') commitUsageDate(el);
 });
 app.addEventListener('toggle', (e) => { if ((e.target as HTMLElement).id === 'ob-opt') obOptOpen = (e.target as HTMLDetailsElement).open; }, true);
 

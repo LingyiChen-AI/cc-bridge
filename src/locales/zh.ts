@@ -119,6 +119,9 @@ export const zh = {
   usageColCost: "花费",
   usageEmpty: "这段时间没有请求",
   routeGpt: "GPT（Codex 订阅）",
+  usageBadDate: "日期格式不对：{detail}",
+  usageFrom: "开始日期",
+  usageTo: "结束日期",
 };
 
 export type Dict = typeof zh;
