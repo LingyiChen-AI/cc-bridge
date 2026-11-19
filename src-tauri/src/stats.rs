@@ -235,6 +235,22 @@ pub struct ReportQuery {
     pub model: Option<String>,
 }
 
+impl ReportQuery {
+    /// 从界面传来的字符串构造：日期必须是合法的 YYYY-MM-DD，粒度只认 day / month，否则返回 Err
+    pub fn parse(
+        from: &str,
+        to: &str,
+        granularity: &str,
+        route: Option<String>,
+        model: Option<String>,
+    ) -> Result<Self, String> {
+        let date = |s: &str| {
+            s.parse::<jiff::civil::Date>().map(|d| d.to_string()).map_err(|_| format!("日期格式错误：{s}"))
+        };
+        Ok(Self { from: date(from)?, to: date(to)?, granularity: Granularity::parse(granularity)?, route, model })
+    }
+}
+
 /// 一组汇总数；`cost_usd` 是按价格表折算的「等价 API 价」，没有价格的模型不计入
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -253,14 +269,16 @@ pub struct Totals {
 
 impl Totals {
     fn add_agg(&mut self, a: &Agg, cost: f64) {
-        self.count += a.n;
-        self.errors += a.e;
-        self.ms += a.ms;
-        self.input += a.input;
-        self.cache_read += a.cr;
-        self.cache_write += a.cw + a.cw1h;
-        self.output += a.out;
-        self.cost_usd += cost;
+        self.add(&Totals {
+            count: a.n,
+            errors: a.e,
+            ms: a.ms,
+            input: a.input,
+            cache_read: a.cr,
+            cache_write: a.cw + a.cw1h,
+            output: a.out,
+            cost_usd: cost,
+        });
     }
 
     fn add(&mut self, o: &Totals) {
@@ -595,7 +613,7 @@ impl Stats {
         // rows 按 (桶, 线路, 模型) 有序，同桶的行相邻
         for ((key, route, model), a) in &rows {
             let cost = Self::cost_of(route, model, a);
-            if cost.is_none() && (a.n > 0 || a.usage().input + a.cr + a.cw + a.cw1h + a.out > 0) {
+            if cost.is_none() && (a.n > 0 || a.input + a.cr + a.cw + a.cw1h + a.out > 0) {
                 unpriced.insert(model.clone());
             }
             let mut t = Totals::default();
@@ -996,6 +1014,33 @@ mod tests {
         let r = s.report_at(&q("2026-11-19", "2026-11-19", Granularity::Day), "2026-11-19");
         let names: Vec<_> = r.buckets[0].models.iter().map(|m| m.model.as_str()).collect();
         assert_eq!(names, ["claude-opus-5-5", "claude-sonnet-5", "gpt-6.1-sol"]);
+    }
+
+    #[test]
+    fn report_query_rejects_invalid_dates_and_granularity() {
+        let ok = ReportQuery::parse("2026-11-01", "2026-11-19", "day", None, None).unwrap();
+        assert_eq!((ok.from.as_str(), ok.to.as_str()), ("2026-11-01", "2026-11-19"));
+        assert_eq!(ReportQuery::parse("2026/11/01", "2026-11-19", "day", None, None).unwrap_err(), "日期格式错误：2026/11/01");
+        assert_eq!(ReportQuery::parse("2026-11-01", "abc", "day", None, None).unwrap_err(), "日期格式错误：abc");
+        assert!(ReportQuery::parse("2026-02-30", "2026-11-19", "day", None, None).is_err());
+        assert!(ReportQuery::parse("2026-11-01", "2026-11-19", "week", None, None).is_err());
+    }
+
+    #[test]
+    fn csv_field_quotes_special_chars() {
+        assert_eq!(csv_field("plain"), "plain");
+        assert_eq!(csv_field("a,b"), "\"a,b\"");
+        assert_eq!(csv_field("a\"b"), "\"a\"\"b\"");
+    }
+
+    #[test]
+    fn report_prices_one_hour_cache_write_at_1h_rate() {
+        let (_t, s) = empty_stats();
+        // opus-5-5：缓存写 5m 价 5、1h 价 8（美元/百万）
+        put(&s, "2026-11-19", "claude", "claude-opus-5-5", Agg { n: 1, cw1h: 1_000_000, ..Default::default() });
+        let r = s.report_at(&q("2026-11-19", "2026-11-19", Granularity::Day), "2026-11-19");
+        assert_eq!(r.totals.cost_usd, 8.0);
+        assert_eq!(r.totals.cache_write, 1_000_000);
     }
 
     #[test]

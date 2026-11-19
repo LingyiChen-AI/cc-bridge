@@ -150,8 +150,8 @@ fn usage_report(
     route: Option<String>,
     model: Option<String>,
 ) -> Result<stats::UsageReport, String> {
-    let granularity = stats::Granularity::parse(&granularity)?;
-    Ok(st.report(&stats::ReportQuery { from, to, granularity, route, model }))
+    let q = stats::ReportQuery::parse(&from, &to, &granularity, route, model)?;
+    Ok(st.report(&q))
 }
 
 /// 导出 CSV 到下载目录（取不到就放应用数据目录），返回文件路径
@@ -165,12 +165,11 @@ fn export_usage_csv(
     route: Option<String>,
     model: Option<String>,
 ) -> Result<String, String> {
-    let granularity = stats::Granularity::parse(&granularity)?;
+    let q = stats::ReportQuery::parse(&from, &to, &granularity, route, model)?;
     let dir = match dirs::download_dir() {
         Some(d) => d,
         None => app.path().app_data_dir().map_err(|e| e.to_string())?,
     };
-    let q = stats::ReportQuery { from, to, granularity, route, model };
     st.export_csv(&q, &dir).map(|p| p.display().to_string()).map_err(|e| e.to_string())
 }
 
