@@ -67,7 +67,23 @@ export interface Activity {
   ms: number;
   inputTokens: number | null;
   outputTokens: number | null;
+  cacheReadTokens: number | null; // 缓存读 token；上游没给时为 null
+  cacheWriteTokens: number | null; // 缓存写 token（5m + 1h）；上游没给时为 null
   error: string | null;
+}
+
+// ───────── 用量统计（后端 stats.rs：usage_report，camelCase） ─────────
+/** 一组汇总：请求数、失败数、总耗时、四项 token 与等价 API 价（美元） */
+export interface UsageTotals { count: number; errors: number; ms: number; input: number; cacheRead: number; cacheWrite: number; output: number; costUsd: number }
+/** 某线路某模型在一个桶里的汇总；priced=false 表示没有价格，costUsd 恒为 0 */
+export interface UsageModelRow { route: string; model: string; priced: boolean; totals: UsageTotals }
+/** 一个时间桶：日桶 YYYY-MM-DD，月桶 YYYY-MM；只返回有数据的桶 */
+export interface UsageBucket { key: string; byRoute: Record<string, UsageTotals>; models: UsageModelRow[] }
+export interface UsageReport {
+  from: string; to: string; granularity: 'day' | 'month'; days: number;
+  totals: UsageTotals; byRoute: Record<string, UsageTotals>; buckets: UsageBucket[];
+  unpricedModels: string[];
+  routes: string[]; models: string[]; // 范围内出现过的全部线路 / 模型（不受过滤影响）
 }
 
 export interface Overview {

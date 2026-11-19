@@ -27,6 +27,10 @@
   --shadow: 0 1px 2px rgba(28, 25, 23, 0.05);
   --mono: 'Cascadia Mono', 'JetBrains Mono', 'SF Mono', Consolas, monospace;
   --sans: 'Segoe UI Variable Text', 'Segoe UI', -apple-system, 'PingFang SC', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif;
+  /* 用量统计线路色：全图一致，深浅色相同 */
+  --r-claude: #D97757;
+  --r-codex: #10A37F;
+  --r-api: #6E59D9;
   color-scheme: light dark;
 }
 @media (prefers-color-scheme: dark) {
@@ -376,3 +380,51 @@ input.v.bad { border-color: var(--err); }
 .steps .sm.idle { border: 1.5px solid var(--border-strong); }
 .steps .why { color: var(--text-3); font-size: 11.5px; line-height: 1.45; user-select: text; }
 .steps .why.fail { color: var(--err); }
+
+/* 用量统计（动态 → 统计）：不加入场动画，周期刷新时整页重绘也不闪 */
+.ufilters { display: flex; flex-direction: column; gap: 8px; }
+.urow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.useg { flex: none; }
+.useg button { flex: none; padding: 5px 12px; white-space: nowrap; }
+.upills { display: flex; gap: 4px; margin-left: auto; flex-wrap: nowrap; min-width: 0; }
+.upills button { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 4px 10px; font-size: 12px; white-space: nowrap; color: var(--text-2); }
+.upills button:hover { border-color: var(--border-strong); }
+.upills button.on { border-color: var(--acc-d); color: var(--acc-d); font-weight: 600; }
+.usel { flex: 1 1 0; min-width: 0; }
+.usel .input { height: 30px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); padding: 0 9px; width: 100%; font-size: 12.5px; }
+.urow > .btn { flex: none; }
+.udates input.v { width: 150px; font-family: var(--sans); }
+.udates span { color: var(--text-3); }
+.unote { display: flex; gap: 8px; align-items: flex-start; background: var(--warn-soft); border: 1px solid var(--warn-line); border-radius: 12px; padding: 9px 12px; font-size: 12px; color: var(--text-2); line-height: 1.5; }
+.unote > svg { color: var(--warn); margin-top: 1px; }
+.unote span { min-width: 0; overflow-wrap: anywhere; }
+.unote.err { background: var(--err-soft); border-color: var(--err-line); color: var(--err); }
+.unote.err > svg { color: var(--err); }
+.ucards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.ucard { background: var(--surface); border-radius: 16px; padding: 12px 14px; box-shadow: var(--shadow); min-width: 0; }
+.ucard .k { font-size: 12px; color: var(--text-3); display: flex; align-items: center; gap: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucard .utag { font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: var(--soft); color: var(--text-2); line-height: 17px; overflow: hidden; text-overflow: ellipsis; }
+.ucard .v { font-size: 21px; font-weight: 650; margin-top: 2px; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ucard .sub { font-size: 11.5px; color: var(--text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
+.ushare { display: flex; height: 6px; border-radius: 6px; background: var(--soft); overflow: hidden; margin-top: 8px; gap: 2px; }
+.ushare i { display: block; height: 100%; min-width: 2px; }
+.ushare i.hit { background: var(--acc); border-radius: 6px; }
+.r-claude { background: var(--r-claude); }
+.r-codex { background: var(--r-codex); }
+.r-api { background: var(--r-api); }
+.ulegend { display: flex; gap: 14px; justify-content: center; font-size: 11.5px; color: var(--text-2); margin-top: -4px; flex-wrap: wrap; }
+.ulegend span { display: inline-flex; align-items: center; gap: 5px; }
+.rdot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
+.ucard-chart { padding: 12px 14px; }
+.ucard-chart .sec-h { margin-bottom: 4px; }
+.uchart { height: 180px; width: 100%; }
+.utable-card { padding: 12px 14px 6px; }
+.utable-card .sec-h { margin-bottom: 4px; }
+.utable-card .sec-h b { font-size: 13px; font-variant-numeric: tabular-nums; }
+.utable { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.utable col.n { width: 15%; }
+.utable th { font-weight: 500; color: var(--text-3); font-size: 11.5px; text-align: right; padding: 6px 0 6px 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.utable td { text-align: right; padding: 8px 0 8px 8px; border-top: 1px solid var(--border); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.utable th:first-child, .utable td:first-child { text-align: left; padding-left: 0; }
+.utable td.um > div { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.utable td.um span { font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }

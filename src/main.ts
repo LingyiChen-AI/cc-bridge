@@ -1,5 +1,5 @@
 // 界面：方案 A「一键开关」——主页一个大开关 + 底部四个标签（主页 / 模型 / 动态 / 设置）；首次引导是一页自动检测 + 一键接管。
-import { invoke, onEvent, onStatus, type Activity, type AppConfig, type AuthState, type EnvReport, type CustomApiDto, type CustomApiStepEvent, type Overview, type Status, type StepId, type StepResult, type UpdateInfo, type VerifyReport } from './api';
+import { invoke, onEvent, onStatus, type Activity, type AppConfig, type AuthState, type EnvReport, type CustomApiDto, type CustomApiStepEvent, type Overview, type Status, type StepId, type StepResult, type UpdateInfo, type UsageModelRow, type UsageReport, type UsageTotals, type VerifyReport } from './api';
 import { icon } from './icons';
 import { LANGS, setLang, t, trError } from './i18n';
 import { toast } from './toast';
@@ -36,7 +36,16 @@ let capi: CapiForm | null = null;
 let capiDel: { id: string; model: string } | null = null;
 
 let tab: Tab = 'home';
-let feedMode: 'req' | 'raw' = 'req';
+let feedMode: 'stats' | 'req' | 'raw' = 'stats';
+// 用量统计：当前报表、筛选条件、请求序号（丢弃过期响应）、上次请求时间（节流）
+let usage: UsageReport | null = null;
+let usageErr: string | null = null;
+const usageQ: { gran: 'today' | 'day' | 'month'; range: 7 | 30 | 90 | 'custom'; from: string; to: string; route: string; model: string; bucket: string | null } =
+  { gran: 'day', range: 30, from: '', to: '', route: '', model: '', bucket: null };
+let usageSeq = 0;
+let usageAt = 0;
+let usageTimer = 0;
+const USAGE_MIN_GAP = 3000; // activity 事件触发的刷新至少间隔 3 秒
 let query = '';
 const folds = new Map<string, boolean>(); // 模型分组：用户手动展开 / 收起过的
 let seenErrAt = Date.now(); // 「动态」标签的红点：这之后有失败请求才亮
@@ -282,13 +291,149 @@ function reqLine(r: Activity) {
 }
 
 function feedTab(s: Status) {
-  const seg = `<div class="seg"><button class="${feedMode === 'req' ? 'on' : ''}" data-act="feed-mode" data-mode="req">${t('feedReq')}</button><button class="${feedMode === 'raw' ? 'on' : ''}" data-act="feed-mode" data-mode="raw">${t('feedRaw')}</button></div>`;
+  const segBtn = (m: typeof feedMode, label: string) => `<button class="${feedMode === m ? 'on' : ''}" data-act="feed-mode" data-mode="${m}">${label}</button>`;
+  const seg = `<div class="seg">${segBtn('stats', t('feedStats'))}${segBtn('req', t('feedReq'))}${segBtn('raw', t('feedRaw'))}</div>`;
+  if (feedMode === 'stats') return `${seg}${statsView(s)}`;
   if (feedMode === 'raw') {
     return `${seg}<div class="logs" id="logs">${s.logsTail.map(logLine).join('\n') || t('noLogs')}</div>
       <div><button class="btn" data-act="copy-logs">${icon.copy(14)} ${t('copyAll')}</button></div>`;
   }
   const list = activity?.recent ?? [];
   return `${seg}${list.length ? `<div class="feed">${list.map(reqLine).join('')}</div>` : `<div class="card empty">${t('feedEmpty')}</div>`}`;
+}
+
+// ───────── 用量统计 ─────────
+const ROUTES = ['claude', 'codex', 'api'] as const;
+const routeName = (r: string) => (r === 'claude' ? t('routeClaude') : r === 'codex' ? t('routeGpt') : r === 'api' ? t('routeApi') : r);
+const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const daysAgo = (n: number) => { const d = new Date(); d.setDate(d.getDate() - n); return ymd(d); };
+/** 金额：$ + 两位小数；大于 0 但不到 1 美分显示 <$0.01 */
+const fmtUsd = (v: number) => (v > 0 && v < 0.01 ? '<$0.01' : `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`);
+/** Token 数：K / M / B 缩写，保留一位小数（整数去掉 .0） */
+function fmtTok(n: number) {
+  const units: [number, string][] = [[1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+  for (const [d, u] of units) if (Math.abs(n) >= d) { const v = n / d; return `${v >= 100 ? v.toFixed(0) : v.toFixed(1).replace(/\.0$/, '')}${u}`; }
+  return String(n);
+}
+const fmtNum = (v: number) => (v >= 10 || Number.isInteger(v) ? Math.round(v).toLocaleString() : v.toFixed(1));
+const tokIn = (x: UsageTotals) => x.input + x.cacheRead + x.cacheWrite;
+const tokAll = (x: UsageTotals) => tokIn(x) + x.output;
+/** 缓存命中率 = 缓存读 ÷（未命中输入 + 缓存读 + 缓存写）；分母为 0 返回 null */
+const hitRate = (x: UsageTotals) => (tokIn(x) ? x.cacheRead / tokIn(x) : null);
+const fmtPct = (v: number | null) => (v === null ? '—' : `${(v * 100).toFixed(1)}%`);
+const statsVisible = () => !!status?.onboarded && !obVisible() && tab === 'feed' && feedMode === 'stats';
+
+/** 当前筛选 → 后端参数；「今天」= from=to=今天、按日 */
+function usageArgs() {
+  const q = usageQ;
+  const today = ymd(new Date());
+  if (q.gran === 'today') return { from: today, to: today, granularity: 'day', route: q.route || null, model: q.model || null };
+  const custom = q.range === 'custom';
+  const from = custom ? q.from || daysAgo(29) : daysAgo((q.range as number) - 1);
+  const to = custom ? q.to || today : today;
+  return { from, to, granularity: q.gran, route: q.route || null, model: q.model || null };
+}
+
+/** 拉报表：序号自增，过期响应丢弃；user=true（用户改筛选）时自定义日期框有焦点也重绘 */
+async function loadUsage(user = false): Promise<void> {
+  clearTimeout(usageTimer);
+  usageTimer = 0;
+  const seq = ++usageSeq;
+  usageAt = Date.now();
+  try {
+    const r = await invoke<UsageReport>('usage_report', usageArgs());
+    if (seq !== usageSeq) return;
+    usage = r;
+    usageErr = null;
+  } catch (e) {
+    if (seq !== usageSeq) return;
+    usageErr = String(e).replace(/^Error:\s*/, '');
+  }
+  if (!statsVisible()) return;
+  const id = (document.activeElement as HTMLElement | null)?.id;
+  if (shouldRerender() || (user && (id === 'u-from' || id === 'u-to'))) render();
+}
+
+/** activity 事件很频繁：统计页可见时节流刷新，两次请求至少间隔 USAGE_MIN_GAP */
+function scheduleUsage() {
+  if (!statsVisible() || usageTimer) return;
+  usageTimer = window.setTimeout(() => { usageTimer = 0; void loadUsage(); }, Math.max(0, usageAt + USAGE_MIN_GAP - Date.now()));
+}
+
+/** 把多个桶里的同线路同模型行合并（未选桶时明细表显示整个范围） */
+function mergeRows(rows: UsageModelRow[]): UsageModelRow[] {
+  const m = new Map<string, UsageModelRow>();
+  for (const r of rows) {
+    const k = `${r.route}\u0000${r.model}`;
+    const cur = m.get(k);
+    if (!cur) { m.set(k, { ...r, totals: { ...r.totals } }); continue; }
+    const a = cur.totals, b = r.totals;
+    a.count += b.count; a.errors += b.errors; a.ms += b.ms; a.input += b.input; a.cacheRead += b.cacheRead; a.cacheWrite += b.cacheWrite; a.output += b.output; a.costUsd += b.costUsd;
+  }
+  return [...m.values()].sort((x, y) => y.totals.costUsd - x.totals.costUsd || tokAll(y.totals) - tokAll(x.totals) || x.model.localeCompare(y.model));
+}
+
+/** 线路占比条：按 pick 取值，三条线路固定顺序与颜色 */
+function shareBar(by: Record<string, UsageTotals> | undefined, pick: (x: UsageTotals) => number, fmt: (v: number) => string) {
+  const vals = ROUTES.map((r) => [r, by?.[r] ? pick(by[r]) : 0] as const);
+  const sum = vals.reduce((a, [, v]) => a + v, 0);
+  return `<div class="ushare">${sum > 0 ? vals.filter(([, v]) => v > 0).map(([r, v]) => `<i class="r-${r}" style="width:${(v / sum) * 100}%" title="${esc(`${routeName(r)} · ${fmt(v)}`)}"></i>`).join('') : ''}</div>`;
+}
+
+function statsView(_s: Status): string {
+  const q = usageQ;
+  const r = usage;
+  const today = q.gran === 'today';
+  const btn = (act: string, v: string, on: boolean, label: string) => `<button class="${on ? 'on' : ''}" data-act="${act}" data-v="${v}">${label}</button>`;
+  const gran = `<div class="seg useg">${btn('usage-gran', 'today', today, t('usageToday'))}${btn('usage-gran', 'day', q.gran === 'day', t('usageDaily'))}${btn('usage-gran', 'month', q.gran === 'month', t('usageMonthly'))}</div>`;
+  const ranges = today ? '' : `<div class="upills">${([7, 30, 90] as const).map((n) => btn('usage-range', String(n), q.range === n, t('usageLast', { n }))).join('')}${btn('usage-range', 'custom', q.range === 'custom', t('usageCustom'))}</div>`;
+  const a = usageArgs();
+  const max = ymd(new Date());
+  const custom = !today && q.range === 'custom'
+    ? `<div class="urow udates"><input type="date" class="v" id="u-from" value="${esc(a.from)}" max="${max}" aria-label="from"><span>–</span><input type="date" class="v" id="u-to" value="${esc(a.to)}" max="${max}" aria-label="to"></div>` : '';
+  // 下拉选项来自报表（不受过滤影响）；当前选中的值不在列表里也保留，避免选项消失
+  const withCur = (list: string[], cur: string) => (cur && !list.includes(cur) ? [...list, cur] : list);
+  const routeOpts = [{ value: '', label: t('usageAllRoutes') }, ...withCur(r?.routes ?? [], q.route).map((x) => ({ value: x, label: routeName(x) }))];
+  const modelOpts = [{ value: '', label: t('usageAllModels') }, ...withCur(r?.models ?? [], q.model).map((x) => ({ value: x, label: x }))];
+  const filters = `<div class="ufilters">
+    <div class="urow">${gran}${ranges}</div>${custom}
+    <div class="urow"><div class="usel">${renderSelect('u-route', routeOpts, q.route, t('usageAllRoutes'))}</div><div class="usel">${renderSelect('u-model', modelOpts, q.model, t('usageAllModels'))}</div>
+      <button class="btn sm" data-act="usage-export">${icon.download(13)} ${t('usageExport')}</button></div></div>`;
+
+  const notes = (usageErr ? `<div class="unote err">${icon.alert(15)}<span>${esc(usageErr)}</span></div>` : '')
+    + (r?.unpricedModels.length ? `<div class="unote">${icon.alert(15)}<span>${esc(t('usageUnpriced', { models: r.unpricedModels.join(', ') }))}</span></div>` : '');
+
+  const tot = r?.totals;
+  const days = Math.max(1, r?.days ?? 1);
+  const avg = (v: string) => (today ? '' : t('usageDailyAvg', { v }));
+  const card = (k: string, v: string, sub: string, bar: string) => `<div class="ucard"><div class="k">${k}</div><div class="v">${v}</div><div class="sub">${sub || '&nbsp;'}</div>${bar}</div>`;
+  const hr = tot ? hitRate(tot) : null;
+  const cards = `<div class="ucards">
+    ${card(`${esc(t('usageCost'))}<span class="utag">${esc(t('usageApiPrice'))}</span>`, tot ? fmtUsd(tot.costUsd) : '—', tot ? esc(avg(fmtUsd(tot.costUsd / days))) : '', shareBar(r?.byRoute, (x) => x.costUsd, fmtUsd))}
+    ${card(esc(t('usageRequests')), tot ? tot.count.toLocaleString() : '—', tot ? esc(avg(fmtNum(tot.count / days))) : '', shareBar(r?.byRoute, (x) => x.count, (v) => v.toLocaleString()))}
+    ${card(esc(t('usageTokens')), tot ? fmtTok(tokAll(tot)) : '—', tot ? esc(t('usageInOut', { in: fmtTok(tokIn(tot)), out: fmtTok(tot.output) })) : '', shareBar(r?.byRoute, tokAll, fmtTok))}
+    ${card(esc(t('usageHitRate')), fmtPct(hr), tot && tokIn(tot) ? `${fmtTok(tot.cacheRead)} / ${fmtTok(tokIn(tot))}` : '', `<div class="ushare"><i class="hit" style="width:${(hr ?? 0) * 100}%"></i></div>`)}
+  </div>`;
+  const present = ROUTES.filter((x) => r?.byRoute[x]);
+  const legend = present.length ? `<div class="ulegend">${present.map((x) => `<span><i class="rdot r-${x}"></i>${esc(routeName(x))}</span>`).join('')}</div>` : '';
+
+  // 图表区（Task 6 在占位上挂 ECharts）；「今天」只有一个桶，不画图
+  const priced = !!r?.buckets.some((b) => b.models.some((m) => m.priced));
+  const chart = today ? '' : `<section class="card ucard-chart"><div class="sec-h"><b>${esc(priced ? `${t('usageCost')} · ${t('usageApiPrice')}` : t('usageTokensChart'))}</b></div><div id="usage-chart-slot" class="uchart"></div></section>`;
+
+  // 明细表：选中桶 → 该桶各模型；未选 → 整个范围合并
+  const bucket = q.bucket ? r?.buckets.find((b) => b.key === q.bucket) ?? null : null;
+  const rows = bucket ? bucket.models : mergeRows((r?.buckets ?? []).flatMap((b) => b.models));
+  const title = today ? t('usageToday') : bucket ? bucket.key : r ? (r.from === r.to ? r.from : `${r.from} – ${r.to}`) : '';
+  const clear = bucket ? `<button class="link" data-act="usage-bucket" data-key="" aria-label="clear">${icon.close(13)}</button>` : '';
+  const tr = (m: UsageModelRow) => `<tr><td class="um" title="${esc(`${routeName(m.route)} · ${m.model}`)}"><div><i class="rdot r-${esc(m.route)}"></i><span>${esc(m.model)}</span></div></td>
+    <td>${m.totals.count.toLocaleString()}</td><td>${fmtTok(tokAll(m.totals))}</td><td>${fmtPct(hitRate(m.totals))}</td><td>${m.priced ? fmtUsd(m.totals.costUsd) : '—'}</td></tr>`;
+  const table = !r ? '' : !rows.length ? `<section class="card"><div class="empty">${t('usageEmpty')}</div></section>`
+    : `<section class="card utable-card"><div class="sec-h"><b>${esc(title)}</b>${clear}</div>
+      <table class="utable"><colgroup><col><col class="n"><col class="n"><col class="n"><col class="n"></colgroup>
+        <thead><tr><th>${t('usageColModel')}</th><th>${t('usageColReq')}</th><th>${t('usageColTokens')}</th><th>${t('usageColHit')}</th><th>${t('usageColCost')}</th></tr></thead>
+        <tbody>${rows.map(tr).join('')}</tbody></table></section>`;
+  return `${filters}${notes}${cards}${legend}${chart}${table}`;
 }
 
 function logLine(l: string) {
@@ -535,6 +680,7 @@ async function act(name: string, el: HTMLElement): Promise<void> {
         if (next !== tab) scrollTop[next] = 0;
         tab = next;
         render();
+        if (statsVisible()) void loadUsage();
         break;
       }
       case 'power': {
@@ -583,7 +729,29 @@ async function act(name: string, el: HTMLElement): Promise<void> {
         await setModels([...cur]);
         break;
       }
-      case 'feed-mode': feedMode = el.dataset.mode as 'req' | 'raw'; render(); break;
+      case 'feed-mode': feedMode = el.dataset.mode as typeof feedMode; render(); if (statsVisible()) void loadUsage(); break;
+      // 统计页筛选：改条件后立即重新拉报表，清掉选中的桶
+      case 'usage-gran': {
+        const g = el.dataset.v as typeof usageQ.gran;
+        if (g === usageQ.gran) break;
+        usageQ.gran = g;
+        if (g === 'month' && typeof usageQ.range === 'number' && usageQ.range < 90) usageQ.range = 90; // 按月看 7 / 30 天意义不大
+        usageQ.bucket = null; render(); await loadUsage(true);
+        break;
+      }
+      case 'usage-range': {
+        const v = el.dataset.v === 'custom' ? 'custom' : (Number(el.dataset.v) as 7 | 30 | 90);
+        if (v === usageQ.range) break;
+        if (v === 'custom') { const a = usageArgs(); usageQ.from = a.from; usageQ.to = a.to; } // 自定义从当前范围起步
+        usageQ.range = v; usageQ.bucket = null; render(); await loadUsage(true);
+        break;
+      }
+      case 'usage-bucket': { const k = el.dataset.key || null; usageQ.bucket = k === usageQ.bucket ? null : k; render(); break; }
+      case 'usage-export': {
+        const path = await invoke<string>('export_usage_csv', usageArgs());
+        toast(t('usageExported', { path }));
+        break;
+      }
       case 'copy-logs': { const n = await invoke<number>('copy_logs'); toast(t('toastCopiedLogs', { n })); break; }
       case 'test-net': {
         const proxy = (document.getElementById('f-proxy') as HTMLInputElement).value.trim() || null;
@@ -673,6 +841,18 @@ app.addEventListener('input', (e) => {
 app.addEventListener('change', (e) => {
   const el = e.target as HTMLInputElement;
   if (el.id === 'f-lang') return void saveConfig({ language: selectValue('f-lang') || null });
+  if (el.id === 'u-route' || el.id === 'u-model') {
+    const v = selectValue(el.id);
+    if (el.id === 'u-route') usageQ.route = v; else usageQ.model = v;
+    usageQ.bucket = null;
+    return void loadUsage(true);
+  }
+  if (el.id === 'u-from' || el.id === 'u-to') {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(el.value)) return; // 没填完整不查
+    if (el.id === 'u-from') usageQ.from = el.value; else usageQ.to = el.value;
+    usageQ.bucket = null;
+    return void loadUsage(true);
+  }
   const key = el.dataset?.save as keyof AppConfig | undefined;
   if (!key) return;
   const v = el.value.trim();
@@ -722,6 +902,8 @@ onEvent<CustomApiStepEvent>('custom-api-step', (ev) => {
 });
 onEvent<Overview>('activity', (o) => {
   activity = o;
+  // 统计页不显示请求列表：不立即重绘，只节流刷新报表（报表回来再重绘）
+  if (statsVisible()) return scheduleUsage();
   if (status?.onboarded && tab !== 'settings' && shouldRerender()) render();
 });
 
@@ -735,8 +917,11 @@ onEvent<Overview>('activity', (o) => {
   // 仅浏览器预览（?mock=...）用：直接打开某个标签 / 更新面板，方便截图检查
   const q = new URLSearchParams(location.search);
   if (q.has('mock') && q.get('tab')) tab = q.get('tab') as Tab;
-  if (q.has('mock') && q.get('feed') === 'raw') feedMode = 'raw';
+  if (q.has('mock') && (q.get('feed') === 'raw' || q.get('feed') === 'req')) feedMode = q.get('feed') as 'raw' | 'req';
   if (q.has('mock') && q.has('sheet')) sheetOpen = true;
+  // 统计页预览：ugran=today|month，urange=custom
+  if (q.has('mock') && (q.get('ugran') === 'today' || q.get('ugran') === 'month')) usageQ.gran = q.get('ugran') as 'today' | 'month';
+  if (q.has('mock') && q.get('urange') === 'custom') { usageQ.range = 'custom'; usageQ.from = daysAgo(13); usageQ.to = ymd(new Date()); }
   if (q.has('mock') && q.has('err')) seenErrAt = 0;
   if (q.has('mock') && q.has('capidel')) { const c = status.customApis[0]; if (c) capiDel = { id: c.id, model: c.model }; }
   const cp = q.has('mock') ? q.get('capi') : null; // 预览：progress = 校验中途，fail = 失败态，edit = 编辑态
@@ -746,5 +931,6 @@ onEvent<Overview>('activity', (o) => {
     if (cp === 'progress') capi.steps = Object.fromEntries(mockStep(1, false)); else if (cp === 'fail') capi.steps = Object.fromEntries(mockStep(2, true));
   }
   render();
+  if (statsVisible()) void loadUsage();
   if (!status.onboarded) await loadEnv();
 })();
