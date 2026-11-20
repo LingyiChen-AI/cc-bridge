@@ -52,7 +52,11 @@
         "dialogImagePath": "icons/installer/wix-dialog.bmp"
       }
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "10.15"
+    }
   },
   "plugins": {
     "updater": {
