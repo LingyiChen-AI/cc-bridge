@@ -56,6 +56,7 @@ export const zh = {
   // 提示
   toastRestart: '正在重启代理', toastKill: '正在接管端口', toastLogin: '已打开终端，登录完成后会自动检测',
   toastRefreshed: '已刷新，共 {n} 个模型', toastCopiedCmd: '已复制命令', toastCopiedLogs: '已复制 {n} 行日志', toastSaved: '已保存', toastDone: '设置完成',
+  ccTitle: 'Claude Code 版本', ccOldTitle: 'Claude Code 版本过旧', ccOldBody: '当前 v{version}，v{min} 起 /model 才能列出 Codex 模型。升级：', ccMissing: '没找到 claude 命令。只用编辑器插件可以忽略；命令行需 v{min} 及以上', ccOkToast: 'Claude Code v{version}，已满足要求',
   err_noCli: '未安装 Codex CLI：npm i -g @openai/codex', err_terminal: '打开终端失败：{detail}',
   updTitle: '发现新版本 v{version}', updBody: '当前 v{current}。更新时会先撤销接管、停止代理，装完自动重新打开。', updNow: '立即更新', updDownloading: '正在下载 {pct}%', version: '版本 v{v}', checkUpdate: '检查更新', toastUpToDate: '已是最新版本', toastCheckFail: '检查更新失败：{detail}', toastUpdateFail: '更新失败：{detail}',
   // 新界面（主页大开关 / 模型 / 动态 / 设置 / 一页引导）

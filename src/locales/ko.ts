@@ -49,6 +49,7 @@ export const ko: Dict = {
   takeoverWizardSub: 'settings.json에 기록하며, 종료하면 자동으로 원래대로 되돌립니다',
   toastRestart: '프록시를 다시 시작하는 중', toastKill: '포트를 인계받는 중', toastLogin: '터미널을 열었습니다. 로그인이 자동으로 감지됩니다',
   toastRefreshed: '새로 고침 완료, 모델 {n}개', toastCopiedCmd: '명령을 복사했습니다', toastCopiedLogs: '로그 {n}줄을 복사했습니다', toastSaved: '저장했습니다', toastDone: '설정 완료',
+  ccTitle: 'Claude Code 버전', ccOldTitle: 'Claude Code가 오래되었습니다', ccOldBody: '현재 v{version}. /model에 Codex 모델이 표시되려면 v{min} 이상이 필요합니다. 업데이트:', ccMissing: 'claude 명령을 찾을 수 없습니다. 에디터 확장만 쓴다면 무시해도 됩니다(CLI는 v{min} 이상 필요)', ccOkToast: 'Claude Code v{version}: 요구 사항 충족',
   err_noCli: 'Codex CLI가 설치되지 않았습니다: npm i -g @openai/codex', err_terminal: '터미널을 열지 못했습니다: {detail}',
   updTitle: '새 버전 v{version} 사용 가능', updBody: '현재 v{current}. 업데이트 시 연결을 해제하고 프록시를 중지한 뒤, 완료되면 자동으로 다시 실행합니다.', updNow: '지금 업데이트', updDownloading: '다운로드 중 {pct}%', version: '버전 v{v}', checkUpdate: '업데이트 확인', toastUpToDate: '최신 버전입니다', toastCheckFail: '업데이트 확인 실패: {detail}', toastUpdateFail: '업데이트 실패: {detail}',
   // 新界面（主页大开关 / 模型 / 动态 / 设置 / 一页引导）

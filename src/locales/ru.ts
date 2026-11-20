@@ -49,6 +49,7 @@ export const ru: Dict = {
   takeoverWizardSub: 'Записывает settings.json; восстанавливается автоматически при выходе',
   toastRestart: 'Перезапуск прокси', toastKill: 'Перехват порта', toastLogin: 'Терминал открыт; вход будет обнаружен автоматически',
   toastRefreshed: 'Обновлено, моделей: {n}', toastCopiedCmd: 'Команда скопирована', toastCopiedLogs: 'Скопировано строк: {n}', toastSaved: 'Сохранено', toastDone: 'Настройка завершена',
+  ccTitle: 'Версия Claude Code', ccOldTitle: 'Claude Code устарел', ccOldBody: 'Установлена v{version}; модели Codex появляются в /model начиная с v{min}. Обновить:', ccMissing: 'Команда claude не найдена. Можно игнорировать, если вы используете только расширение редактора; CLI нужна v{min}+', ccOkToast: 'Claude Code v{version}: версия подходит',
   err_noCli: 'Codex CLI не установлен: npm i -g @openai/codex', err_terminal: 'Не удалось открыть терминал: {detail}',
   updTitle: 'Доступна новая версия v{version}', updBody: 'Установлена v{current}. При обновлении Claude Code отключается и прокси останавливается, затем приложение перезапускается.', updNow: 'Обновить', updDownloading: 'Загрузка {pct}%', version: 'Версия v{v}', checkUpdate: 'Проверить обновления', toastUpToDate: 'Установлена последняя версия', toastCheckFail: 'Не удалось проверить обновления: {detail}', toastUpdateFail: 'Не удалось обновить: {detail}',
   // 新界面（主页大开关 / 模型 / 动态 / 设置 / 一页引导）

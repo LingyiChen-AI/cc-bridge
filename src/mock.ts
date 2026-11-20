@@ -53,6 +53,8 @@ const env: EnvReport = {
   settingsOk: true,
   settingsError: null,
   systemProxy: 'http://127.0.0.1:7890',
+  // ?ccold 预览 Claude Code 版本过旧的提示
+  claudeCode: new URLSearchParams(location.search).has('ccold') ? { version: '2.1.220', min: '2.1.243', ok: false } : { version: '2.1.329', min: '2.1.243', ok: true },
 };
 
 const t0 = Date.now();
@@ -153,7 +155,7 @@ export const mock = {
     }
     if (cmd === 'usage_report') return usageReport(args) as T;
     if (cmd === 'export_usage_csv') { usageReport(args); return `C:\\Users\\me\\Downloads\\cc-bridge-usage-${String(args?.from)}-${String(args?.to)}.csv` as T; }
-    const r: Record<string, unknown> = { get_status: status, detect_environment: env, test_outbound: 286, refresh_models: models, copy_logs: 3, app_version: '0.1.0', get_activity: activity, preview_start: null, finish_onboarding: null, set_models: null, set_takeover: null, save_config: null, get_update: new URLSearchParams(location.search).has('update') ? { version: '0.2.0', current: '0.1.0', notes: null } : null };
+    const r: Record<string, unknown> = { get_status: status, detect_environment: env, claude_code_check: env.claudeCode, test_outbound: 286, refresh_models: models, copy_logs: 3, app_version: '0.1.0', get_activity: activity, preview_start: null, finish_onboarding: null, set_models: null, set_takeover: null, save_config: null, get_update: new URLSearchParams(location.search).has('update') ? { version: '0.2.0', current: '0.1.0', notes: null } : null };
     return r[cmd] as T;
   },
   listen: () => {},

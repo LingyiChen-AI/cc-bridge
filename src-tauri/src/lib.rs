@@ -35,6 +35,29 @@ pub struct EnvReport {
     settings_ok: bool,
     settings_error: Option<String>,
     system_proxy: Option<String>,
+    claude_code: ClaudeCodeCheck,
+}
+
+/// 本机 Claude Code 版本是否够新（能读 settings.json 的 `modelPicker`）。
+/// version 为 None 表示没找到 `claude` 命令（可能只装了编辑器插件），界面上只提示、不拦。
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaudeCodeCheck {
+    version: Option<String>,
+    min: String,
+    ok: bool,
+}
+
+fn check_claude_code() -> ClaudeCodeCheck {
+    let version = platform::claude_code_version();
+    let ok = version.as_deref().and_then(platform::parse_version).is_some_and(|v| v >= platform::MIN_CLAUDE_CODE);
+    let (a, b, c) = platform::MIN_CLAUDE_CODE;
+    ClaudeCodeCheck { version, min: format!("{a}.{b}.{c}"), ok }
+}
+
+#[tauri::command]
+async fn claude_code_check() -> Result<ClaudeCodeCheck, String> {
+    tauri::async_runtime::spawn_blocking(check_claude_code).await.map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -109,6 +132,7 @@ async fn detect_environment(ctl: Ctl<'_>) -> Result<EnvReport, String> {
             settings_ok: parsed.is_ok(),
             settings_error: parsed.err().map(|e| e.to_string()),
             system_proxy: platform::system_proxy(),
+            claude_code: check_claude_code(),
         }
     })
     .await
@@ -241,6 +265,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(updater::UpdaterState::default())
         .setup(move |app| {
+            // macOS：常驻菜单栏的后台应用，不占程序坞、也不进 Cmd+Tab。窗口只从菜单栏图标打开。
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             let handle = app.handle().clone();
             let home = dirs::home_dir().expect("home dir");
             let data_dir = app.path().app_data_dir()?.join(if config::DEV_MODE { "dev" } else { "" });
@@ -296,6 +323,7 @@ pub fn run() {
             refresh_models,
             copy_logs,
             detect_environment,
+            claude_code_check,
             test_outbound,
             preview_start,
             finish_onboarding,

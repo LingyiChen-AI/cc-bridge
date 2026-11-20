@@ -263,6 +263,7 @@ input.v.bad { border-color: var(--err); }
 .chk .st { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; flex: none; margin-top: 1px; }
 .chk .st.ok { background: var(--ok); color: #fff; animation: pop 0.3s; }
 .chk .st.fail { background: var(--err); color: #fff; animation: pop 0.3s; }
+.chk .st.warn { background: var(--warn); color: #fff; animation: pop 0.3s; font-weight: 800; font-size: 13px; line-height: 1; }
 .chk .st.wait { border: 2px solid var(--border-strong); }
 .chk .st.run { color: var(--acc); }
 .chk .st svg { stroke-width: 3; }

@@ -99,6 +99,9 @@ pub struct Controller {
     tx: mpsc::Sender<()>,
     shut: AtomicBool,
     on_status: Mutex<Option<Box<dyn Fn(&StatusDto) + Send>>>,
+    /// 上次推给界面的状态（序列化后）。事件循环每 5 秒空转一次也会走到 publish，
+    /// 不比对就会白推一次 status-changed，界面整页重建（动画重放 = 肉眼可见的闪烁）。
+    last_published: Mutex<Option<String>>,
 }
 
 fn now() -> i64 {
@@ -132,6 +135,7 @@ impl Controller {
             tx,
             shut: AtomicBool::new(false),
             on_status: Mutex::new(None),
+            last_published: Mutex::new(None),
         });
         me.refresh_auth();
         // 崩溃恢复：上次没撤销干净的先撤销
@@ -397,8 +401,17 @@ impl Controller {
         self.commit_custom(v)
     }
 
+    /// 状态没变就不推：界面收到一次 status-changed 就整页重绘，空推会让页面每 5 秒闪一下。
     pub fn publish(&self) {
         let st = self.status();
+        let snapshot = serde_json::to_string(&st).ok();
+        {
+            let mut last = self.last_published.lock().unwrap();
+            if snapshot.is_some() && *last == snapshot {
+                return;
+            }
+            *last = snapshot;
+        }
         let _ = self.app.emit("status-changed", &st);
         if let Some(f) = self.on_status.lock().unwrap().as_ref() {
             f(&st);

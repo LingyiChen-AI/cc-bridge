@@ -54,7 +54,11 @@ export interface EnvReport {
   settingsOk: boolean;
   settingsError: string | null;
   systemProxy: string | null;
+  claudeCode: ClaudeCodeCheck;
 }
+
+/** 本机 Claude Code 版本检查（后端 lib.rs：ClaudeCodeCheck）。version 为 null 表示没找到 claude 命令 */
+export interface ClaudeCodeCheck { version: string | null; min: string; ok: boolean }
 
 /** 一次请求（后端 stats.rs：Activity） */
 export interface Activity {

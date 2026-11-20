@@ -49,6 +49,7 @@ export const fr: Dict = {
   takeoverWizardSub: 'Écrit settings.json ; restauré automatiquement à la fermeture',
   toastRestart: 'Redémarrage du proxy', toastKill: 'Reprise du port', toastLogin: 'Terminal ouvert ; la connexion est détectée automatiquement',
   toastRefreshed: 'Actualisé, {n} modèles', toastCopiedCmd: 'Commande copiée', toastCopiedLogs: '{n} lignes copiées', toastSaved: 'Enregistré', toastDone: 'Configuration terminée',
+  ccTitle: 'Version de Claude Code', ccOldTitle: 'Claude Code est obsolète', ccOldBody: 'Version v{version} ; /model affiche les modèles Codex à partir de v{min}. Mettre à jour :', ccMissing: "Commande claude introuvable. Sans importance si vous n'utilisez qu'une extension d'éditeur ; la CLI requiert v{min}+", ccOkToast: 'Claude Code v{version} est à jour',
   err_noCli: 'Codex CLI n’est pas installé : npm i -g @openai/codex', err_terminal: 'Impossible d’ouvrir un terminal : {detail}',
   updTitle: 'Nouvelle version v{version} disponible', updBody: 'Version actuelle v{current}. La mise à jour déconnecte Claude Code et arrête le proxy, puis relance l’app.', updNow: 'Mettre à jour', updDownloading: 'Téléchargement {pct} %', version: 'Version v{v}', checkUpdate: 'Rechercher des mises à jour', toastUpToDate: 'Vous êtes à jour', toastCheckFail: 'Échec de la recherche de mises à jour : {detail}', toastUpdateFail: 'Échec de la mise à jour : {detail}',
   // 新界面（主页大开关 / 模型 / 动态 / 设置 / 一页引导）

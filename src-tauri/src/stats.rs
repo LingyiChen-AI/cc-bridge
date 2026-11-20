@@ -1017,16 +1017,20 @@ mod tests {
     }
 
     #[test]
-    fn api_and_codex_routes_are_unpriced() {
+    fn api_route_and_unlisted_gpt_models_are_unpriced() {
         let (_t, s) = empty_stats();
         put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 1_000_000, 1_000_000));
         put(&s, "2026-11-19", "api", "api-claude-opus-5-5", agg(1, 10, 20));
-        put(&s, "2026-11-18", "codex", "gpt-6.1-sol", agg(2, 100, 200));
-        put(&s, "2026-11-19", "codex", "gpt-6.1-sol", agg(1, 1, 2));
+        // gpt-6.1-sol：输入 $2、输出 $10（每百万）
+        put(&s, "2026-11-18", "codex", "gpt-6.1-sol", agg(2, 500_000, 100_000));
+        put(&s, "2026-11-19", "codex", "gpt-6.1-sol", agg(1, 500_000, 100_000));
+        // 官方没公布价格
+        put(&s, "2026-11-19", "codex", "gpt-5.3-codex-spark", agg(1, 1, 2));
         let r = s.report_at(&q("2026-11-18", "2026-11-19", Granularity::Day), "2026-11-19");
-        assert_eq!(r.totals.cost_usd, 24.0);
-        assert_eq!(r.totals.input, 1_000_000 + 10 + 100 + 1);
-        assert_eq!(r.unpriced_models, vec!["api-claude-opus-5-5", "gpt-6.1-sol"]);
+        assert!((r.totals.cost_usd - (24.0 + 2.0 + 2.0)).abs() < 1e-9, "{}", r.totals.cost_usd);
+        assert!((r.by_route["codex"].cost_usd - 4.0).abs() < 1e-9);
+        assert_eq!(r.totals.input, 1_000_000 + 10 + 1_000_000 + 1);
+        assert_eq!(r.unpriced_models, vec!["api-claude-opus-5-5", "gpt-5.3-codex-spark"]);
     }
 
     #[test]
@@ -1085,12 +1089,15 @@ mod tests {
     #[test]
     fn models_sorted_by_cost_then_tokens() {
         let (_t, s) = empty_stats();
-        put(&s, "2026-11-19", "codex", "gpt-6.1-sol", agg(1, 9_000_000, 0));
+        // 未知价格的 token 再多也排在有价的后面
+        put(&s, "2026-11-19", "codex", "gpt-5.3-codex-spark", agg(1, 9_000_000, 0));
         put(&s, "2026-11-19", "claude", "claude-sonnet-5", agg(1, 1_000_000, 0));
         put(&s, "2026-11-19", "claude", "claude-opus-5-5", agg(1, 1_000_000, 0));
+        // 1M 输入 × $10 = $10，比 opus 的 $4 贵
+        put(&s, "2026-11-19", "codex", "gpt-6-astra", agg(1, 1_000_000, 0));
         let r = s.report_at(&q("2026-11-19", "2026-11-19", Granularity::Day), "2026-11-19");
         let names: Vec<_> = r.buckets[0].models.iter().map(|m| m.model.as_str()).collect();
-        assert_eq!(names, ["claude-opus-5-5", "claude-sonnet-5", "gpt-6.1-sol"]);
+        assert_eq!(names, ["gpt-6-astra", "claude-opus-5-5", "claude-sonnet-5", "gpt-5.3-codex-spark"]);
     }
 
     #[test]
@@ -1132,7 +1139,8 @@ mod tests {
         let (_t, s) = empty_stats();
         let today = day_of(SystemTime::now());
         put(&s, &today, "claude", "claude-opus-5-5", Agg { n: 2, e: 1, ms: 300, input: 1_000_000, out: 1_000_000, ..Default::default() });
-        put(&s, &today, "codex", "gpt-6.1-sol", agg(1, 5, 6));
+        put(&s, &today, "codex", "gpt-6.1-sol", agg(1, 500_000, 100_000));
+        put(&s, &today, "codex", "gpt-5.3-codex-spark", agg(1, 5, 6));
         let out = tempfile::tempdir().unwrap();
         let path = s.export_csv(&q(&today, &today, Granularity::Day), out.path()).unwrap();
         assert_eq!(path.file_name().unwrap().to_string_lossy(), format!("cc-bridge-usage-{today}_{today}.csv"));
@@ -1147,7 +1155,9 @@ mod tests {
         let claude = lines.iter().find(|l| l.contains("claude-opus-5-5")).unwrap();
         assert!(claude.ends_with(",24.000000"), "{claude}");
         assert!(claude.contains(",2,1,150,"), "{claude}");
-        let codex = lines.iter().find(|l| l.contains("gpt-6.1-sol")).unwrap();
-        assert!(codex.ends_with(','), "未知价格留空：{codex}");
+        let gpt = lines.iter().find(|l| l.contains("gpt-6.1-sol")).unwrap();
+        assert!(gpt.ends_with(",2.000000"), "{gpt}");
+        let spark = lines.iter().find(|l| l.contains("gpt-5.3-codex-spark")).unwrap();
+        assert!(spark.ends_with(','), "未知价格留空：{spark}");
     }
 }

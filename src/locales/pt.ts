@@ -49,6 +49,7 @@ export const pt: Dict = {
   takeoverWizardSub: 'Grava settings.json; restaurado automaticamente ao sair',
   toastRestart: 'Reiniciando o proxy', toastKill: 'Assumindo a porta', toastLogin: 'Terminal aberto; o login é detectado automaticamente',
   toastRefreshed: 'Atualizado, {n} modelos', toastCopiedCmd: 'Comando copiado', toastCopiedLogs: '{n} linhas copiadas', toastSaved: 'Salvo', toastDone: 'Configuração concluída',
+  ccTitle: 'Versão do Claude Code', ccOldTitle: 'Claude Code desatualizado', ccOldBody: 'Você tem a v{version}; o /model lista modelos Codex a partir da v{min}. Atualize com:', ccMissing: 'Comando claude não encontrado. Tudo bem se você usa só uma extensão de editor; a CLI precisa da v{min}+', ccOkToast: 'Claude Code v{version} está atualizado',
   err_noCli: 'O Codex CLI não está instalado: npm i -g @openai/codex', err_terminal: 'Não foi possível abrir um terminal: {detail}',
   updTitle: 'Nova versão v{version} disponível', updBody: 'Você tem a v{current}. A atualização desconecta o Claude Code e para o proxy; depois o app é reaberto.', updNow: 'Atualizar agora', updDownloading: 'Baixando {pct}%', version: 'Versão v{v}', checkUpdate: 'Verificar atualizações', toastUpToDate: 'Você está atualizado', toastCheckFail: 'Falha ao verificar atualizações: {detail}', toastUpdateFail: 'Falha ao atualizar: {detail}',
   // 新界面（主页大开关 / 模型 / 动态 / 设置 / 一页引导）

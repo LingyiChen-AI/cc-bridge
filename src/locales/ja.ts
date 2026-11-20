@@ -49,6 +49,7 @@ export const ja: Dict = {
   takeoverWizardSub: 'settings.json に書き込み、終了時に自動で元に戻します',
   toastRestart: 'プロキシを再起動しています', toastKill: 'ポートを引き継いでいます', toastLogin: 'ターミナルを開きました。ログインは自動で検出されます',
   toastRefreshed: '更新しました（{n} モデル）', toastCopiedCmd: 'コマンドをコピーしました', toastCopiedLogs: 'ログ {n} 行をコピーしました', toastSaved: '保存しました', toastDone: '設定が完了しました',
+  ccTitle: 'Claude Code のバージョン', ccOldTitle: 'Claude Code が古すぎます', ccOldBody: '現在 v{version}。/model に Codex モデルが出るのは v{min} 以降です。更新：', ccMissing: 'claude コマンドが見つかりません。エディタ拡張のみなら無視して構いません（CLI は v{min} 以上が必要）', ccOkToast: 'Claude Code v{version}：要件を満たしています',
   err_noCli: 'Codex CLI がインストールされていません：npm i -g @openai/codex', err_terminal: 'ターミナルを開けませんでした：{detail}',
   updTitle: '新しいバージョン v{version} があります', updBody: '現在 v{current}。更新時は接続を解除してプロキシを停止し、完了後に自動で再起動します。', updNow: '今すぐ更新', updDownloading: 'ダウンロード中 {pct}%', version: 'バージョン v{v}', checkUpdate: '更新を確認', toastUpToDate: '最新バージョンです', toastCheckFail: '更新の確認に失敗しました：{detail}', toastUpdateFail: '更新に失敗しました：{detail}',
   // 新界面（主页大开关 / 模型 / 动态 / 设置 / 一页引导）

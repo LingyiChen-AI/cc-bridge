@@ -1,5 +1,5 @@
 // 界面：方案 A「一键开关」——主页一个大开关 + 底部四个标签（主页 / 模型 / 动态 / 设置）；首次引导是一页自动检测 + 一键接管。
-import { invoke, onEvent, onStatus, type Activity, type AppConfig, type AuthState, type EnvReport, type CustomApiDto, type CustomApiStepEvent, type Overview, type Status, type StepId, type StepResult, type UpdateInfo, type UsageModelRow, type UsageReport, type UsageTotals, type VerifyReport } from './api';
+import { invoke, onEvent, onStatus, type Activity, type AppConfig, type AuthState, type EnvReport, type ClaudeCodeCheck, type CustomApiDto, type CustomApiStepEvent, type Overview, type Status, type StepId, type StepResult, type UpdateInfo, type UsageModelRow, type UsageReport, type UsageTotals, type VerifyReport } from './api';
 import { icon } from './icons';
 import { LANGS, setLang, t, trError } from './i18n';
 import { toast } from './toast';
@@ -28,6 +28,9 @@ let updatePct: number | null = null;
 let sheetOpen = false;
 let checking = false;
 let activity: Overview | null = null;
+/** 本机 Claude Code 版本；启动时查一次，主界面「重新检测」或引导页重新检测时刷新 */
+let cc: ClaudeCodeCheck | null = null;
+const CC_UPDATE_CMD = 'claude update';
 
 // 「自己的 Claude API」弹窗状态；密钥只存在这里（内存）和输入框里，不显示、不记录
 interface CapiForm { id: string | null; mask: string; url: string; key: string; model: string; running: boolean; steps: Partial<Record<StepId, StepResult>>; error: string | null; failed: boolean }
@@ -84,6 +87,10 @@ function issues(s: Status): Issue[] {
   }
   if (s.settingsError) out.push({ tone: 'err', title: t('settingsErrTitle'), body: trError('settingsErr_', s.settingsError), acts: [] });
   if (s.networkHint) out.push({ tone: 'warn', title: t('netTitle'), body: t('netBody'), acts: [['go-settings', t('checkProxy')]] });
+  // 只在找到了 claude 命令且版本过旧时提示：没装命令行的可能只用编辑器插件，不打扰
+  if (cc && cc.version && !cc.ok) {
+    out.push({ tone: 'warn', title: t('ccOldTitle'), body: `${t('ccOldBody', { version: cc.version, min: cc.min })} ${CC_UPDATE_CMD}`, acts: [['copy-cc-update', t('copy')], ['cc-recheck', t('recheck')]] });
+  }
   return out;
 }
 
@@ -130,7 +137,7 @@ function families(models: string[]) {
 const newErrors = () => (activity?.recent ?? []).some((r) => !r.ok && r.at > seenErrAt);
 
 // ───────── 主界面 ─────────
-const ANIMATED = '.mask, .sheet, .issue, .chk .st.ok, .chk .st.fail, .chk .fix, .done-ic';
+const ANIMATED = '.mask, .sheet, .issue, .chk .st.ok, .chk .st.fail, .chk .st.warn, .chk .fix, .done-ic';
 /** 动画元素的身份：类名 + 文本。抽屉、遮罩只认类名（内容随进度变化也算同一个）；步骤图标看所在那一行的文字。 */
 function animKey(n: Element): string {
   const c = [...n.classList].filter((x) => x !== 'still').join('.');
@@ -522,7 +529,7 @@ function updateSheet(u: UpdateInfo) {
 }
 
 // ───────── 首次引导：一页自动检测 + 一键接管 ─────────
-type Check = 'wait' | 'run' | 'ok' | 'fail';
+type Check = 'wait' | 'run' | 'ok' | 'fail' | 'warn';
 const ob = {
   env: null as EnvReport | null,
   cfg: null as AppConfig | null,
@@ -543,7 +550,8 @@ async function loadEnv() {
     if (!ob.cfg.outbound_proxy && ob.env.systemProxy) ob.cfg.outbound_proxy = ob.env.systemProxy;
   }
   void testObNet();
-  for (let i = 1; i <= 4; i++) setTimeout(() => { ob.shown = i; if (obVisible()) render(); }, i * 220);
+  cc = ob.env.claudeCode;
+  for (let i = 1; i <= 5; i++) setTimeout(() => { ob.shown = i; if (obVisible()) render(); }, i * 220);
 }
 
 async function testObNet() {
@@ -557,7 +565,7 @@ async function testObNet() {
   render();
 }
 
-function obChecks(): Record<'cli' | 'login' | 'net' | 'cfg', Check> {
+function obChecks(): Record<'cli' | 'login' | 'net' | 'cfg' | 'cc', Check> {
   const e = ob.env;
   const auth = status?.auth ?? e?.auth;
   const at = (i: number, v: Check): Check => (!e ? 'run' : ob.shown < i ? 'wait' : v);
@@ -566,6 +574,8 @@ function obChecks(): Record<'cli' | 'login' | 'net' | 'cfg', Check> {
     login: at(2, auth && auth.kind !== 'missing' ? 'ok' : 'fail'),
     net: at(3, ob.net === 'wait' || ob.net === 'run' ? 'run' : ob.net.ok ? 'ok' : 'fail'),
     cfg: at(4, e?.settingsOk ? 'ok' : 'fail'),
+    // 版本不够只是选单里看不到 Codex 模型，代理照样能用，所以是黄色提示、不拦「一键接管」
+    cc: at(5, e?.claudeCode.ok ? 'ok' : 'warn'),
   };
 }
 
@@ -588,9 +598,10 @@ function renderOnboarding(s: Status) {
   const e = ob.env;
   const auth = s.auth ?? e?.auth;
   const row = (st: Check, title: string, okText: string, failText: string, fix = '') => {
-    const ic = st === 'ok' ? icon.check(13) : st === 'fail' ? icon.close(13) : st === 'run' ? '<span class="spinner"></span>' : '';
+    const ic = st === 'ok' ? icon.check(13) : st === 'fail' ? icon.close(13) : st === 'warn' ? '!' : st === 'run' ? '<span class="spinner"></span>' : '';
+    const bad = st === 'fail' || st === 'warn';
     return `<div class="chk"><span class="st ${st}">${ic}</span><div class="tx"><b>${title}</b>
-      <div class="d">${st === 'ok' ? okText : st === 'fail' ? failText : st === 'run' ? t('obChecking') : t('obWaiting')}</div>${st === 'fail' && fix ? `<div class="fix">${fix}</div>` : ''}</div></div>`;
+      <div class="d">${st === 'ok' ? okText : bad ? failText : st === 'run' ? t('obChecking') : t('obWaiting')}</div>${bad && fix ? `<div class="fix">${fix}</div>` : ''}</div></div>`;
   };
   const netMs = typeof ob.net === 'object' && ob.net.ok ? ob.net.ms : 0;
   const via = ob.cfg?.outbound_proxy ? t('viaProxy', { proxy: esc(ob.cfg.outbound_proxy) }) : t('viaDirect');
@@ -603,8 +614,14 @@ function renderOnboarding(s: Status) {
     row(c.net, t('chkNet'), `${via} · ${netMs} ms`, esc(typeof ob.net === 'object' && !ob.net.ok ? ob.net.text : ''),
       `<input class="v" id="ob-proxy" placeholder="http://127.0.0.1:7890" value="${esc(ob.cfg?.outbound_proxy ?? '')}" spellcheck="false"><button class="btn dark" data-act="ob-net-test">${t('testBtn')}</button>`),
     row(c.cfg, t('claudeConfig'), t('chkCfgOk', { path: esc(e?.claudeSettings ?? '') }), esc(trError('settingsErr_', e?.settingsError ?? ''))),
+    row(c.cc, t('ccTitle'), `v${esc(e?.claudeCode.version ?? '')}`,
+      e?.claudeCode.version
+        ? `${t('ccOldBody', { version: esc(e.claudeCode.version), min: esc(e.claudeCode.min) })} <code>${CC_UPDATE_CMD}</code>`
+        : t('ccMissing', { min: esc(e?.claudeCode.min ?? '') }),
+      e?.claudeCode.version ? `<button class="btn dark" data-act="copy-cc-update">${icon.copy(14)} ${t('copy')}</button>${recheck}` : recheck),
   ].join('');
-  const ready = Object.values(c).every((v) => v === 'ok');
+  // Claude Code 版本只提示不拦：等它检测完即可
+  const ready = (['cli', 'login', 'net', 'cfg'] as const).every((k) => c[k] === 'ok') && (c.cc === 'ok' || c.cc === 'warn');
   const starting = ob.phase === 'starting';
   const cfg = ob.cfg;
   const summary = t('obOptSummary', { auto: cfg?.autostart ? t('on') : t('off'), port: cfg?.port ?? '' });
@@ -735,6 +752,12 @@ async function act(name: string, el: HTMLElement): Promise<void> {
       case 'go-settings': tab = 'settings'; scrollTop.settings = 0; render(); document.getElementById('f-port')?.focus(); break;
       case 'go-raw': tab = 'feed'; feedMode = 'raw'; render(); break;
       case 'copy-dev-cmd': await navigator.clipboard.writeText(el.dataset.cmd ?? ''); toast(t('toastCopiedCmd')); break;
+      case 'copy-cc-update': await navigator.clipboard.writeText(CC_UPDATE_CMD); toast(t('toastCopiedCmd')); break;
+      case 'cc-recheck':
+        cc = await invoke<ClaudeCodeCheck>('claude_code_check');
+        render();
+        if (cc.ok) toast(t('ccOkToast', { version: cc.version ?? '' }));
+        break;
       case 'model': {
         const cur = new Set(s.selectedModels);
         const m = el.dataset.model!;
@@ -973,5 +996,6 @@ onEvent<Overview>('activity', (o) => {
   }
   render();
   if (statsVisible()) void loadUsage();
+  if (status.onboarded) void invoke<ClaudeCodeCheck>('claude_code_check').then((r) => { cc = r; if (shouldRerender()) render(); }).catch(() => {});
   if (!status.onboarded) await loadEnv();
 })();

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- 由 tauri-bundler 合并进 .app 的 Info.plist。
+     LSUIElement：菜单栏常驻应用，不进程序坞、不进 Cmd+Tab。
+     运行时也设了 ActivationPolicy::Accessory（见 src/lib.rs），但那要等 setup 跑到，
+     启动瞬间程序坞里会闪一下图标；写在 Info.plist 里从一开始就不出现。 -->
+<plist version="1.0">
+<dict>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
