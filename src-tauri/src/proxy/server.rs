@@ -1686,7 +1686,9 @@ async fn dispatch_request(
 
     // Only the Anthropic passthrough speaks message threads natively; the
     // translating backends accept a new thread and reject continuing one.
-    if !matches!(provider.name(), "anthropic" | "custom-api")
+    // custom-api 虽是原样透传，对面是第三方中转站，不认识 thread 会静默只处理新增消息、丢掉前文，
+    // 所以同样拒绝续接：Claude Code 收到这个 400 后本会话关闭 threads、带完整上下文重发。
+    if provider.name() != "anthropic"
         && let Some(thread) = body.extra.remove("thread")
         && thread.get("type").and_then(Value::as_str) != Some("create")
     {

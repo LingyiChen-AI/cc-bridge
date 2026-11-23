@@ -571,6 +571,35 @@ async fn message_thread_create_text_dispatches_without_thread() {
 }
 
 #[tokio::test]
+async fn message_thread_continue_is_rejected_for_custom_api() {
+    // 第三方中转站不认识 thread，会静默只处理新增的那几条消息，模型丢掉全部前文。
+    let (response, captured, _) = message_thread_response(
+        AliasProvider::Codex,
+        "custom-api",
+        json!({
+            "model": "gpt-5.5",
+            "messages": [{"role": "user", "content": "next"}],
+            "thread": {"type": "continue", "previous_message_id": "msg_test"}
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(captured.len(), 0);
+    let body: Value = serde_json::from_slice(
+        &axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("capability_rejected: beta_header:message-threads-2026-08-12")
+    );
+}
+
+#[tokio::test]
 async fn message_thread_continue_reaches_anthropic_passthrough() {
     let thread = json!({"type": "continue", "previous_message_id": "msg_test"});
     let (response, captured, _) = message_thread_response(

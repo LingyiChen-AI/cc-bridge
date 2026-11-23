@@ -24,11 +24,13 @@ pub(crate) fn build_client() -> reqwest::Client {
     .expect("failed to build custom api client")
 }
 
-/// 只把顶层 `model` 改成真实模型名；非 JSON 返回 None（原样转发）。
+/// 把顶层 `model` 改成真实模型名，并去掉中转站不支持的 `thread`（Message Threads）；
+/// 非 JSON 返回 None（原样转发）。
 pub(crate) fn rewrite_model(raw: &[u8], real_model: &str) -> Option<Vec<u8>> {
     let mut doc: Value = serde_json::from_slice(raw).ok()?;
     let obj = doc.as_object_mut()?;
     obj.insert("model".into(), Value::String(real_model.to_string()));
+    obj.remove("thread");
     serde_json::to_vec(&doc).ok()
 }
 
@@ -42,7 +44,7 @@ pub(crate) fn entry_model(body_model: Option<String>, raw: &[u8]) -> Option<Stri
     })
 }
 
-/// 去掉入站凭证与订阅专用的 `oauth-*` beta，换上用户的 key。
+/// 去掉入站凭证、订阅专用的 `oauth-*` beta 和中转站不支持的 `message-threads-*` beta，换上用户的 key。
 pub(crate) fn outbound_headers(incoming: &HeaderMap, entry: &CustomApi) -> HeaderMap {
     let mut out = HeaderMap::with_capacity(incoming.len() + 1);
     let mut betas: Vec<String> = Vec::new();
@@ -56,7 +58,11 @@ pub(crate) fn outbound_headers(incoming: &HeaderMap, entry: &CustomApi) -> Heade
                 betas.extend(
                     v.split(',')
                         .map(str::trim)
-                        .filter(|f| !f.is_empty() && !f.starts_with("oauth-"))
+                        .filter(|f| {
+                            !f.is_empty()
+                                && !f.starts_with("oauth-")
+                                && !f.starts_with("message-threads-")
+                        })
                         .map(str::to_string),
                 );
             }
@@ -253,6 +259,25 @@ mod tests {
         assert_eq!(out["model"], "claude-opus-5-5");
         assert_eq!(out["messages"][0]["content"], "hi");
         assert!(rewrite_model(b"not json", "claude-opus-5-5").is_none());
+    }
+
+    #[test]
+    fn rewrite_model_drops_thread() {
+        let raw = br#"{"model":"api-x","messages":[{"role":"user","content":"hi"}],"thread":{"type":"create"}}"#;
+        let out: Value = serde_json::from_slice(&rewrite_model(raw, "x").unwrap()).unwrap();
+        assert!(out.get("thread").is_none());
+        assert_eq!(out["messages"][0]["content"], "hi");
+    }
+
+    #[test]
+    fn outbound_headers_drop_message_threads_beta() {
+        let mut h = incoming();
+        h.insert(
+            "anthropic-beta",
+            HeaderValue::from_static("message-threads-2026-08-12,interleaved-thinking-2025-05-14"),
+        );
+        let out = outbound_headers(&h, &entry("https://a", AuthStyle::XApiKey));
+        assert_eq!(out.get("anthropic-beta").unwrap(), "interleaved-thinking-2025-05-14");
     }
 
     #[test]
